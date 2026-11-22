@@ -136,7 +136,7 @@ with st.sidebar:
 aba_grafico, aba_scanner = st.tabs(["📈 Gráfico Individual", "🔍 Scanner de RSI (Carteira)"])
 
 with aba_grafico:
-    st.title(f"Ticker: {ativo}  -  {tf_label}")
+    st.title(f"{ativo}  -  {tf_label}")
 
     with st.spinner("Buscando cotações na B3..."):
         df, erro_api = carregar_dados_brapi(ativo, periodo, intervalo, token_brapi)
