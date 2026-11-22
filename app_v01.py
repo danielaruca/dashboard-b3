@@ -126,17 +126,19 @@ with st.sidebar:
     ">
         <strong style="color: #D1D4DC;">Observações:</strong><br>
         • A seleção acima de <strong>3mo</strong> somente funciona para <strong>PETR4, VALE3, ITUB4 e MGLU3</strong>.<br>
-        • Demais ativos somente podem ser vistos nos períodos de <strong>1mo</strong> e <strong>3mo</strong> (Plano gratuito da Brapi).<br>
-        <span style="color: #6C7386;">Página desenvolvida por DAAM</span>
+        • Demais ativos somente podem ser vistos nos períodos de <strong>1mo</strong> e <strong>3mo</strong> (Plano gratuito da Brapi).<br>.<br>
+        <span style="color: #6C7386;">Desenvolvedor: Daniel</span>.<br>
+        <span style="color: #6C7386;">Colaboradores: Matheus e Maurício</span>.<br>
     </div>
     """,
-    unsafe_allow_html=True,
+    
+     unsafe_allow_html=True,
     )
 
 aba_grafico, aba_scanner = st.tabs(["📈 Gráfico Individual", "🔍 Scanner de RSI (Carteira)"])
 
 with aba_grafico:
-    st.title(f"{ativo}  -  {tf_label}")
+    st.title(f"{ativo} - {tf_label}")
 
     with st.spinner("Buscando cotações na B3..."):
         df, erro_api = carregar_dados_brapi(ativo, periodo, intervalo, token_brapi)
