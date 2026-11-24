@@ -634,7 +634,7 @@ with aba_guia:
     # 1. Barra Lateral
     st.header("1. Barra Lateral (Configurações)")
     st.markdown(
-        """
+        r"""
         * **Ativo da B3:** Lista pré-definida com **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`). A opção *"Outro (digitar)..."* permite consultar qualquer ticker listado na bolsa brasileira sem o sufixo `.SA`.
         * **Timeframe:** Alterna entre **Diário (`1d`)** e **Semanal (`1wk`)** exclusivamente para a **Aba 1 (Gráfico Individual)**. As Abas 2 e 3 operam fixas no timeframe diário.
         * **Período Histórico:** Define a janela de dados exibida no gráfico individual.
@@ -654,7 +654,7 @@ with aba_guia:
         with st.container(border=True):
             st.subheader("📈 Aba 1: Gráfico Individual")
             st.markdown(
-                """
+                r"""
                 Focada na análise detalhada de um único ativo selecionado na barra lateral:
                 * **Cards de Resumo:** Exibem o último fechamento ajustado, a variação percentual em relação ao candle anterior e a pontuação atual do **IFR (14)**.
                 * **Gráfico Principal (TradingView):** Candlesticks com ajuste de proventos (`adjustedClose`) e seletor dinâmico para alternar entre **EMA 17 / 72**, **EMA 9 / 21** ou **Ambas**.
@@ -666,7 +666,7 @@ with aba_guia:
         with st.container(border=True):
             st.subheader("🔍 Aba 2: Scanner de RSI (Carteira)")
             st.markdown(
-                """
+                r"""
                 Varre simultaneamente todos os **29 ativos** da lista fixa em **3 meses (`1d`)** e alimenta tanto a tabela quanto a grade da Aba 3:
                 * **Filtros Rápidos:** Permite isolar papéis em *Sobrevenda*, *Sobrecompra*, com *Cruzamento recente de Médias* ou com *Volume Anormal*.
                 * **Ordenação Padrão:** A tabela inicia ordenada do **menor IFR para o maior**, destacando primeiro os ativos mais descontados.
@@ -677,7 +677,7 @@ with aba_guia:
     with st.container(border=True):
         st.subheader("🗂️ Aba 3: Visão Geral (Subplots 3M)")
         st.markdown(
-            """
+            r"""
             Apresenta uma grade visual limpa (**3 gráficos por linha**) com todos os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
             * **Cabeçalho de cada Card:** Mostra o código do ativo, preço de fechamento, **variação percentual diária** (verde para alta, vermelho para queda) e o valor atual do **IFR (14)** destacado em cor quando atinge extremos.
             * **Controles:** Permite ordenar os gráficos por *Ordem Alfabética*, *Maior Alta do Dia*, *Maior Queda do Dia* ou *Menor IFR*, além de filtrar visualmente apenas os ativos em zonas extremas de IFR.
@@ -690,7 +690,7 @@ with aba_guia:
     st.header("3. Critérios e Metodologia dos Indicadores")
 
     st.markdown(
-        """
+        r"""
 
         | Indicador / Regra | Parâmetros e Fórmula | Critério de Sinalização |
         | :--- | :--- | :--- |
