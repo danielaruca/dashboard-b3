@@ -22,6 +22,15 @@ st.markdown(
             font-size: 1.05rem;
             font-weight: 600;
         }
+        /* Compacta o espaçamento vertical dos itens da Watchlist na Sidebar */
+        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+            gap: 0.25rem;
+        }
+        [data-testid="stSidebar"] .stButton button {
+            padding-top: 0.15rem;
+            padding-bottom: 0.15rem;
+            min-height: 2.0rem;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -100,43 +109,11 @@ LISTA_CARTEIRA_B3 = [
     "RADL3", "RENT3", "SMAL11", "USIM5", "VALE3", "VAMO3", "VBBR3", "WEGE3",
 ]
 
-with st.sidebar:
-    st.header("Sinal da Brapi B3")
-    ativos_b3 = LISTA_CARTEIRA_B3 + ["Outro (digitar)..."]
-    escolha = st.selectbox("Ativo da B3", ativos_b3)
+# Inicializa o ativo selecionado na sessão para permitir clique na Watchlist da Sidebar
+if "ativo_selecionado" not in st.session_state:
+    st.session_state["ativo_selecionado"] = "BOVA11"
 
-    if escolha == "Outro (digitar)...":
-        ativo = st.text_input("Código do Ativo (ex: RENT3, BPAC11)", value="RENT3").strip().upper().replace(".SA", "")
-    else:
-        ativo = escolha
-
-    # Usa o token direto dos segredos sem expor na tela
-    token_brapi = MEU_TOKEN_BRAPI
-
-    mapa_timeframe = {"Diário (1D)": "1d", "Semanal (1S)": "1wk"}
-    tf_label = st.radio("Timeframe", list(mapa_timeframe.keys()), horizontal=True)
-    intervalo = mapa_timeframe[tf_label]
-
-    opcoes_periodo = ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]
-    periodo = st.selectbox("Período Histórico", opcoes_periodo, index=1)
-
-    st.markdown(
-    """
-    <div style="
-        margin-top: 8px; padding: 10px 14px; background-color: #131722;
-        border-left: 3px solid #2962FF; border-radius: 4px;
-        line-height: 1.35; font-size: 0.85rem; color: #9BA1B0;
-    ">
-        <strong style="color: #D1D4DC;">Observações:</strong><br>
-        • A seleção acima de <strong>3mo</strong> somente funciona para <strong>PETR4, VALE3, ITUB4 e MGLU3</strong>.<br>
-        • Demais ativos somente podem ser vistos nos períodos de <strong>1mo</strong> e <strong>3mo</strong> (Plano gratuito da Brapi).<br>.<br>
-        <span style="color: #6C7386;">Desenvolvedor: Daniel</span>.<br>
-        <span style="color: #6C7386;">Colaboradores: Matheus e Maurício</span>.<br>
-    </div>
-    """,
-    
-     unsafe_allow_html=True,
-    )
+token_brapi = MEU_TOKEN_BRAPI
 
 def executar_varredura_unificada():
     resultados_scan, dados_grade, erros_scan = [], [], []
@@ -252,6 +229,77 @@ def executar_varredura_unificada():
     st.session_state["dados_grade_3m"] = dados_grade
     st.session_state["erros_scanner"] = erros_scan
 
+# Carrega os preços da Watchlist, Scanner e Subplots automaticamente na primeira abertura
+if "df_scanner" not in st.session_state:
+    executar_varredura_unificada()
+
+with st.sidebar:
+    st.header("📋 Watchlist B3")
+
+    if st.button("🔄 Atualizar Cotações", width="stretch"):
+        _requisitar_brapi.clear()
+        executar_varredura_unificada()
+        st.rerun()
+
+    # Busca preços e variações já carregados na sessão (sem custo extra de API)
+    mapa_cotacoes = {}
+    if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
+        for _, row in st.session_state["df_scanner"].iterrows():
+            mapa_cotacoes[row["Ativo"]] = (row["Fechamento (R$)"], row["Variação (%)"])
+
+    # Cabeçalho em linha única com flexbox (alinhamento perfeito e sem sobreposição)
+    st.markdown(
+        """
+        <div style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 4px 6px 4px;
+            margin-top: 4px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #2A2E39;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #6C7386;
+        ">
+            <div style="width: 38%; text-align: center;">ATIVO</div>
+            <div style="width: 29%; text-align: right;">PREÇO</div>
+            <div style="width: 33%; text-align: right;">VAR %</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Lista interativa em 3 colunas: Ativo | Preço | Variação
+    for ticker_w in LISTA_CARTEIRA_B3:
+        col_tk, col_pr, col_vr = st.columns([1.15, 0.85, 0.95])
+
+        with col_tk:
+            destaque = "primary" if st.session_state["ativo_selecionado"] == ticker_w else "secondary"
+            if st.button(ticker_w, key=f"wl_{ticker_w}", type=destaque, width="stretch"):
+                st.session_state["ativo_selecionado"] = ticker_w
+                st.rerun()
+
+        if ticker_w in mapa_cotacoes:
+            preco_w, var_w = mapa_cotacoes[ticker_w]
+            cor_w = "#26A69A" if var_w >= 0 else "#EF5350"
+
+            with col_pr:
+                st.markdown(
+                    f'<div style="text-align: right; font-size: 0.82rem; font-weight: 600; color: #D1D4DC; padding-top: 6px;">{preco_w:.2f}</div>',
+                    unsafe_allow_html=True,
+                )
+            with col_vr:
+                st.markdown(
+                    f'<div style="text-align: right; font-size: 0.82rem; font-weight: 600; color: {cor_w}; padding-top: 6px;">{var_w:+.2f}%</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            with col_pr:
+                st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
+            with col_vr:
+                st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
+
 aba_grafico, aba_scanner, aba_subplots, aba_guia = st.tabs([
     "📈 Gráfico Individual",
     "🔍 Scanner de RSI (Carteira)",
@@ -259,8 +307,47 @@ aba_grafico, aba_scanner, aba_subplots, aba_guia = st.tabs([
     "ℹ️ Guia e Critérios",
 ])
 
-
 with aba_grafico:
+    # Controles do Gráfico Individual (movidos da Sidebar para a Aba 1)
+    with st.container(border=True):
+        c_at, c_tf, c_per = st.columns([1.5, 1.2, 1])
+
+        with c_at:
+            ativos_b3 = LISTA_CARTEIRA_B3 + ["Outro (digitar)..."]
+            idx_padrao = (
+                LISTA_CARTEIRA_B3.index(st.session_state["ativo_selecionado"])
+                if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
+                else len(LISTA_CARTEIRA_B3)
+            )
+            escolha = st.selectbox("Ativo da B3", ativos_b3, index=idx_padrao)
+
+            if escolha == "Outro (digitar)...":
+                ativo = st.text_input(
+                    "Código do Ativo (ex: RENT3, BPAC11)",
+                    value=st.session_state["ativo_selecionado"] if st.session_state["ativo_selecionado"] not in LISTA_CARTEIRA_B3 else "MGLU3",
+                ).strip().upper().replace(".SA", "")
+            else:
+                ativo = escolha
+                st.session_state["ativo_selecionado"] = ativo
+
+        with c_tf:
+            mapa_timeframe = {"Diário (1D)": "1d", "Semanal (1S)": "1wk"}
+            tf_label = st.radio("Timeframe", list(mapa_timeframe.keys()), horizontal=True)
+            intervalo = mapa_timeframe[tf_label]
+
+        with c_per:
+            opcoes_periodo = ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]
+            periodo = st.selectbox("Período Histórico", opcoes_periodo, index=1)
+
+        with st.expander("ℹ️ Observações sobre o Plano Gratuito da Brapi e Créditos", expanded=False):
+            st.markdown(
+                """
+                * A seleção acima de **3mo** somente funciona para **PETR4, VALE3, ITUB4 e MGLU3**.
+                * Demais ativos somente podem ser vistos nos períodos de **1mo** e **3mo** (Plano gratuito da Brapi).
+                * **Desenvolvedor:** Daniel | **Colaboradores:** Matheus e Maurício.
+                """
+            )
+
     st.title(f"{ativo} - {tf_label}")
 
     with st.spinner("Buscando cotações na B3..."):
@@ -288,7 +375,14 @@ with aba_grafico:
     with col1:
         st.metric(label=f"Fechamento ({ultimo['time']})", value=f"R$ {preco_atual:.2f}", border=True)
     with col2:
-        st.metric(label="Variação Percentual", value=f"{variacao_pct:+.2f}%", delta=f"R$ {preco_atual - preco_anterior:+.2f}", border=True)
+        diff_reais = preco_atual - preco_anterior
+        sinal_r = "+" if diff_reais >= 0 else "-"
+        st.metric(
+            label="Variação Percentual",
+            value=f"{variacao_pct:+.2f}%",
+            delta=f"{sinal_r}R$ {abs(diff_reais):.2f}",
+            border=True,
+        )
     with col3:
         st.metric(label="RSI (14)", value=f"{rsi_atual:.2f}", delta=f"{delta_rsi:+.2f} pts", delta_color="off", border=True)
     with col4:
@@ -370,7 +464,7 @@ with aba_scanner:
 
     col_btn, col_filtro = st.columns([1, 2])
     with col_btn:
-        executar_scan = st.button("🔍 Escanear Carteira Agora", type="primary", use_container_width=True)
+        executar_scan = st.button("🔍 Escanear Carteira Agora", type="primary", width="stretch")
     with col_filtro:
         filtro_condicao = st.radio(
             "Filtrar por Condição:",
@@ -386,35 +480,9 @@ with aba_scanner:
         )
 
     if executar_scan:
+        _requisitar_brapi.clear()
         executar_varredura_unificada()
         st.rerun()
-
-        for idx, ticker_scan in enumerate(LISTA_CARTEIRA_B3):
-            barra.progress((idx + 1) / len(LISTA_CARTEIRA_B3), text=f"Analisando {ticker_scan} ({idx + 1}/{len(LISTA_CARTEIRA_B3)})...")
-            df_s, err_s = carregar_dados_brapi(ticker_scan, "3mo", intervalo, token_brapi)
-
-            if not df_s.empty and len(df_s) >= 2:
-                ult, pen = df_s.iloc[-1], df_s.iloc[-2]
-                fech = float(ult["close"])
-                var_p = ((fech - float(pen["close"])) / float(pen["close"])) * 100
-                rsi_v = float(ult["RSI"])
-                cond = "🔴 Sobrecompra (≥ 70)" if rsi_v >= 70 else ("🟢 Sobrevenda (≤ 30)" if rsi_v <= 30 else "⚪ Zona Neutra")
-
-                resultados_scan.append({
-                    "Ativo": ticker_scan,
-                    "Data": ult["time"],
-                    "Fechamento (R$)": fech,
-                    "Variação (%)": var_p,
-                    "RSI (14)": rsi_v,
-                    "Condição": cond,
-                })
-            else:
-                erros_scan.append(f"{ticker_scan}: {err_s}")
-            time.sleep(0.15)
-
-        barra.empty()
-        st.session_state["df_scanner"] = pd.DataFrame(resultados_scan)
-        st.session_state["erros_scanner"] = erros_scana_
 
     if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
         df_res = st.session_state["df_scanner"].copy()
@@ -445,7 +513,7 @@ with aba_scanner:
         else:
             st.dataframe(
                 df_res,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Fechamento (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -473,7 +541,7 @@ with aba_subplots:
     )
 
     with col_btn_sub:
-        carregar_grade = st.button("📊 Carregar Grade de Gráficos", type="primary", use_container_width=True)
+        carregar_grade = st.button("📊 Carregar Grade de Gráficos", type="primary", width="stretch")
     with col_ord_sub:
         ordenacao_sub = st.radio(
             "Ordenar grade por:",
@@ -482,55 +550,9 @@ with aba_subplots:
         )
 
     if carregar_grade:
+        _requisitar_brapi.clear()
         executar_varredura_unificada()
         st.rerun()
-
-        for idx, ticker_sub in enumerate(LISTA_CARTEIRA_B3):
-            barra_sub.progress(
-                (idx + 1) / len(LISTA_CARTEIRA_B3),
-                text=f"Carregando {ticker_sub} ({idx + 1}/{len(LISTA_CARTEIRA_B3)})...",
-            )
-            df_sub, err_sub = carregar_dados_brapi(ticker_sub, "3mo", "1d", token_brapi)
-
-            if not df_sub.empty and len(df_sub) >= 2:
-                preco_ant = float(df_sub.iloc[-2]["close"])
-                preco_fim = float(df_sub.iloc[-1]["close"])
-                var_diaria = ((preco_fim - preco_ant) / preco_ant) * 100
-                rsi_atual = float(df_sub.iloc[-1]["RSI"])
-
-                candles_sub = [
-                    {
-                        "time": r["time"],
-                        "open": float(r["open"]),
-                        "high": float(r["high"]),
-                        "low": float(r["low"]),
-                        "close": float(r["close"]),
-                    }
-                    for _, r in df_sub.iterrows()
-                ]
-
-                dados_grade.append({
-                    "ativo": ticker_sub,
-                    "var_diaria": var_diaria,
-                    "preco_fim": preco_fim,
-                    "rsi": rsi_atual,
-                    "candles": candles_sub,
-                    "erro": "",
-                })
-            else:
-                dados_grade.append({
-                    "ativo": ticker_sub,
-                    "var_diaria": -9999.0,
-                    "preco_fim": 0.0,
-                    "rsi": 999.0,
-                    "candles": [],
-                    "erro": err_sub or "Dados insuficientes",
-                })
-
-            time.sleep(0.15)
-
-        barra_sub.empty()
-        st.session_state["dados_grade_3m"] = dados_grade
 
     if "dados_grade_3m" in st.session_state and st.session_state["dados_grade_3m"]:
         lista_exibicao = list(st.session_state["dados_grade_3m"])
