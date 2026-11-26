@@ -247,6 +247,38 @@ with st.sidebar:
         for _, row in st.session_state["df_scanner"].iterrows():
             mapa_cotacoes[row["Ativo"]] = (row["Fechamento (R$)"], row["Variação (%)"])
 
+    # Controles compactos de ordenação da Watchlist
+    c_ord_campo, c_ord_dir = st.columns([1.6, 1.1])
+    with c_ord_campo:
+        campo_ord_wl = st.selectbox(
+            "Ordenar por",
+            ["Ativo", "Preço", "Var %"],
+            label_visibility="collapsed",
+        )
+    with c_ord_dir:
+        direcao_ord_wl = st.selectbox(
+            "Direção",
+            ["⬆️ Cresc.", "⬇️ Decresc."],
+            label_visibility="collapsed",
+        )
+
+    reverso_wl = direcao_ord_wl == "⬇️ Decresc."
+
+    if campo_ord_wl == "Ativo":
+        lista_watchlist = sorted(LISTA_CARTEIRA_B3, reverse=reverso_wl)
+    elif campo_ord_wl == "Preço":
+        lista_watchlist = sorted(
+            LISTA_CARTEIRA_B3,
+            key=lambda t: mapa_cotacoes[t][0] if t in mapa_cotacoes else (-1.0 if reverso_wl else 999999.0),
+            reverse=reverso_wl,
+        )
+    else:  # Var %
+        lista_watchlist = sorted(
+            LISTA_CARTEIRA_B3,
+            key=lambda t: mapa_cotacoes[t][1] if t in mapa_cotacoes else (-9999.0 if reverso_wl else 9999.0),
+            reverse=reverso_wl,
+        )
+
     # Cabeçalho em linha única com flexbox (alinhamento perfeito e sem sobreposição)
     st.markdown(
         """
@@ -271,7 +303,7 @@ with st.sidebar:
     )
 
     # Lista interativa em 3 colunas: Ativo | Preço | Variação
-    for ticker_w in LISTA_CARTEIRA_B3:
+    for ticker_w in lista_watchlist:
         col_tk, col_pr, col_vr = st.columns([1.15, 0.85, 0.95])
 
         with col_tk:
@@ -339,19 +371,9 @@ with aba_grafico:
             opcoes_periodo = ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]
             periodo = st.selectbox("Período Histórico", opcoes_periodo, index=1)
 
-        with st.expander("ℹ️ Observações sobre o Plano Gratuito da Brapi e Créditos", expanded=False):
-            st.markdown(
-                """
-                * A seleção acima de **3mo** somente funciona para **PETR4, VALE3, ITUB4 e MGLU3**.
-                * Demais ativos somente podem ser vistos nos períodos de **1mo** e **3mo** (Plano gratuito da Brapi).
-                * **Desenvolvedor:** Daniel | **Colaboradores:** Matheus e Maurício.
-                """
-            )
-
     st.title(f"{ativo} - {tf_label}")
 
-    with st.spinner("Buscando cotações na B3..."):
-        df, erro_api = carregar_dados_brapi(ativo, periodo, intervalo, token_brapi)
+    df, erro_api = carregar_dados_brapi(ativo, periodo, intervalo, token_brapi)
 
     if df.empty:
         st.error(
@@ -459,30 +481,21 @@ with aba_grafico:
     )
 
 with aba_scanner:
-    st.title(f"Scanner de RSI (14)  -  {tf_label}")
-    st.caption(f"Varre os **{len(LISTA_CARTEIRA_B3)} ativos** da lista em **3mo** e mantém em cache por 1 hora.")
+    st.title("Scanner de RSI (14) - Diário (1D)")
+    st.caption(f"Exibe os **{len(LISTA_CARTEIRA_B3)} ativos** da carteira em **3mo** (timeframe **1d**). Para atualizar os dados, use o botão na barra lateral.")
 
-    col_btn, col_filtro = st.columns([1, 2])
-    with col_btn:
-        executar_scan = st.button("🔍 Escanear Carteira Agora", type="primary", width="stretch")
-    with col_filtro:
-        filtro_condicao = st.radio(
-            "Filtrar por Condição:",
-            [
-                "Todos",
-                "Sobrevenda (≤ 30)",
-                "Sobrecompra (≥ 70)",
-                "Cruzamento EMA 9/21",
-                "Cruzamento EMA 17/72",
-                "Volume Alto (≥ 150%)",
-            ],
-            horizontal=True,
-        )
-
-    if executar_scan:
-        _requisitar_brapi.clear()
-        executar_varredura_unificada()
-        st.rerun()
+    filtro_condicao = st.radio(
+        "Filtrar por Condição:",
+        [
+            "Todos",
+            "Sobrevenda (≤ 30)",
+            "Sobrecompra (≥ 70)",
+            "Cruzamento EMA 9/21",
+            "Cruzamento EMA 17/72",
+            "Volume Alto (≥ 150%)",
+        ],
+        horizontal=True,
+    )
 
     if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
         df_res = st.session_state["df_scanner"].copy()
@@ -527,32 +540,28 @@ with aba_scanner:
                 for msg_e in st.session_state["erros_scanner"]:
                     st.write(f"• {msg_e}")
     else:
-        st.info("Clique no botão **🔍 Escanear Carteira Agora** acima para calcular o RSI de todos os 29 ativos.")
+        st.info("Nenhum dado carregado no momento. Clique em **🔄 Atualizar Cotações** na barra lateral.")
+        erros_iniciais = st.session_state.get("erros_scanner", [])
+        if erros_iniciais:
+            st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
 
 with aba_subplots:
     st.title("Visão Geral - 3 Meses (Diário)")
-    st.caption(f"Exibe os **{len(LISTA_CARTEIRA_B3)} ativos** em **3mo** (timeframe **1d**) com variação diária e IFR (14).")
+    st.caption(f"Exibe os **{len(LISTA_CARTEIRA_B3)} ativos** em **3mo** (timeframe **1d**) com variação diária e IFR (14). Para atualizar os dados, use o botão na barra lateral.")
 
-    col_btn_sub, col_ord_sub = st.columns([1, 2])
-    filtro_ifr_grade = st.radio(
-        "Filtrar gráficos por IFR:",
-        ["Todos", "Sobrevenda (≤ 30)", "Sobrecompra (≥ 70)", "Extremos (≤ 30 ou ≥ 70)"],
-        horizontal=True,
-    )
-
-    with col_btn_sub:
-        carregar_grade = st.button("📊 Carregar Grade de Gráficos", type="primary", width="stretch")
+    col_filt_sub, col_ord_sub = st.columns(2)
+    with col_filt_sub:
+        filtro_ifr_grade = st.radio(
+            "Filtrar gráficos por IFR:",
+            ["Todos", "Sobrevenda (≤ 30)", "Sobrecompra (≥ 70)", "Extremos (≤ 30 ou ≥ 70)"],
+            horizontal=True,
+        )
     with col_ord_sub:
         ordenacao_sub = st.radio(
             "Ordenar grade por:",
             ["Alfabética (A-Z)", "Maior Alta (Dia)", "Maior Queda (Dia)", "Menor IFR (Sobrevenda)"],
             horizontal=True,
         )
-
-    if carregar_grade:
-        _requisitar_brapi.clear()
-        executar_varredura_unificada()
-        st.rerun()
 
     if "dados_grade_3m" in st.session_state and st.session_state["dados_grade_3m"]:
         lista_exibicao = list(st.session_state["dados_grade_3m"])
@@ -642,7 +651,10 @@ with aba_subplots:
                             st.markdown(f"**{ticker_atual}**")
                             st.warning(f"Indisponível: {item['erro']}")
     else:
-        st.info("Clique no botão **📊 Carregar Grade de Gráficos** acima para exibir os 29 ativos em 3 meses (1D).")
+        st.info("Nenhum dado carregado no momento. Clique em **🔄 Atualizar Cotações** na barra lateral.")
+        erros_iniciais = st.session_state.get("erros_scanner", [])
+        if erros_iniciais:
+            st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
 
 with aba_guia:
     st.title("ℹ️ Guia de Uso e Critérios Técnicos")
@@ -653,15 +665,13 @@ with aba_guia:
 
     st.divider()
 
-    # 1. Barra Lateral
-    st.header("1. Barra Lateral (Configurações)")
+    # 1. Barra Lateral (Watchlist B3)
+    st.header("1. Barra Lateral (Watchlist B3)")
     st.markdown(
         r"""
-        * **Ativo da B3:** Lista pré-definida com **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`). A opção *"Outro (digitar)..."* permite consultar qualquer ticker listado na bolsa brasileira sem o sufixo `.SA`.
-        * **Timeframe:** Alterna entre **Diário (`1d`)** e **Semanal (`1wk`)** exclusivamente para a **Aba 1 (Gráfico Individual)**. As Abas 2 e 3 operam fixas no timeframe diário.
-        * **Período Histórico:** Define a janela de dados exibida no gráfico individual.
-        * **Limitações da API (Brapi):** No plano gratuito, períodos superiores a **3 meses (`3mo`)** funcionam apenas para os ativos de teste liberados (`PETR4`, `VALE3`, `ITUB4` e `MGLU3`). Os demais ativos devem ser consultados em **`1mo`** ou **`3mo`**.
-        * **Cache de Dados:** Todas as consultas ficam armazenadas em cache por **1 hora (`3600s`)** para evitar lentidão e bloqueios por excesso de requisições.
+        * **Lista Interativa de Ativos:** Exibe os **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`) com cotação de fechamento e variação diária. Clicar em qualquer ativo carrega imediatamente seu gráfico na **Aba 1**.
+        * **Ordenação Dinâmica:** Permite ordenar a lista por **Ativo**, **Preço** ou **Var %** em ordem crescente ou decrescente.
+        * **Carregamento Automático e Atualização:** Ao abrir o aplicativo, todas as cotações são carregadas automaticamente. Para buscar preços atualizados durante o pregão, utilize o botão **🔄 Atualizar Cotações** no topo da barra lateral (ele limpa o cache e sincroniza a Watchlist, o Scanner e a Grade de Gráficos de uma só vez).
         """
     )
 
@@ -677,10 +687,10 @@ with aba_guia:
             st.subheader("📈 Aba 1: Gráfico Individual")
             st.markdown(
                 r"""
-                Focada na análise detalhada de um único ativo selecionado na barra lateral:
-                * **Cards de Resumo:** Exibem o último fechamento ajustado, a variação percentual em relação ao candle anterior e a pontuação atual do **IFR (14)**.
-                * **Gráfico Principal (TradingView):** Candlesticks com ajuste de proventos (`adjustedClose`) e seletor dinâmico para alternar entre **EMA 17 / 72**, **EMA 9 / 21** ou **Ambas**.
-                * **Subpainel de IFR:** Linha do Índice de Força Relativa (14 períodos) com marcações horizontais nas zonas de **70 (Sobrecompra)** e **30 (Sobrevenda)**.
+                Focada na análise detalhada de um único ativo:
+                * **Controles do Gráfico:** Seletor de ativo (incluindo a opção *"Outro (digitar)..."* para consultar qualquer ticker da B3), **Timeframe** (`1d` ou `1wk`) e **Período Histórico**.
+                * **Limitações da API (Brapi):** No plano gratuito, períodos acima de **3 meses (`3mo`)** funcionam apenas para `PETR4`, `VALE3`, `ITUB4` e `MGLU3`. Os demais ativos operam em **`1mo`** ou **`3mo`**.
+                * **Cards e Gráfico (TradingView):** Exibem fechamento ajustado, variação percentual, **IFR (14)**, candlesticks com seletor de médias (**EMA 17/72**, **EMA 9/21** ou **Ambas**) e subpainel de IFR.
                 """
             )
 
@@ -689,10 +699,10 @@ with aba_guia:
             st.subheader("🔍 Aba 2: Scanner de RSI (Carteira)")
             st.markdown(
                 r"""
-                Varre simultaneamente todos os **29 ativos** da lista fixa em **3 meses (`1d`)** e alimenta tanto a tabela quanto a grade da Aba 3:
-                * **Filtros Rápidos:** Permite isolar papéis em *Sobrevenda*, *Sobrecompra*, com *Cruzamento recente de Médias* ou com *Volume Anormal*.
+                Exibe a tabela completa dos **29 ativos** da carteira em **3 meses (`1d`)**, já carregada automaticamente na abertura do app:
+                * **Filtros Rápidos:** Permite isolar papéis em *Sobrevenda*, *Sobrecompra*, com *Cruzamento recente de Médias* (`9/21` ou `17/72`) ou com *Volume Anormal*.
                 * **Ordenação Padrão:** A tabela inicia ordenada do **menor IFR para o maior**, destacando primeiro os ativos mais descontados.
-                * **Sincronização:** Ao clicar no botão de varredura aqui, os gráficos da **Aba 3** também são carregados automaticamente.
+                * **Atualização:** Utilize o botão **🔄 Atualizar Cotações** na barra lateral para renovar os dados.
                 """
             )
 
@@ -700,9 +710,9 @@ with aba_guia:
         st.subheader("🗂️ Aba 3: Visão Geral (Subplots 3M)")
         st.markdown(
             r"""
-            Apresenta uma grade visual limpa (**3 gráficos por linha**) com todos os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
+            Apresenta uma grade visual limpa (**3 gráficos por linha**) com os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
             * **Cabeçalho de cada Card:** Mostra o código do ativo, preço de fechamento, **variação percentual diária** (verde para alta, vermelho para queda) e o valor atual do **IFR (14)** destacado em cor quando atinge extremos.
-            * **Controles:** Permite ordenar os gráficos por *Ordem Alfabética*, *Maior Alta do Dia*, *Maior Queda do Dia* ou *Menor IFR*, além de filtrar visualmente apenas os ativos em zonas extremas de IFR.
+            * **Controles:** Permite filtrar por zonas de IFR (*Sobrevenda*, *Sobrecompra* ou *Extremos*) e ordenar os gráficos por *Ordem Alfabética*, *Maior Alta do Dia*, *Maior Queda do Dia* ou *Menor IFR*.
             """
         )
 
@@ -726,4 +736,11 @@ with aba_guia:
 
     st.info(
         "**Aviso Legal:** Esta ferramenta tem caráter exclusivamente educacional e informativo para apoio à análise gráfica, não constituindo recomendação de compra ou venda de ativos mobiliários."
+    )
+
+    st.markdown(
+        '<div style="text-align: center; font-style: italic; color: #8A93A6; font-size: 0.85rem; margin-top: 8px;">'
+        'Desenvolvedor: Daniel &nbsp;-•-&nbsp; Colaboradores: Matheus e Maurício'
+        '</div>',
+        unsafe_allow_html=True,
     )
