@@ -4,6 +4,61 @@ import pandas as pd
 import requests
 from lightweight_charts_v5 import lightweight_charts_v5_component
 
+
+# Imports e função de busca de notícias
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+from urllib.parse import quote
+
+@st.cache_data(ttl=900, show_spinner=False)
+def buscar_noticias_rss(consulta: str, limite: int = 12) -> list[dict]:
+    query_codificada = quote(consulta)
+    base_rss = "/".join(["https://news.google.com", "rss", "search"])
+    url = f"{base_rss}?q={query_codificada}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        raiz = ET.fromstring(resp.content)
+    except Exception:
+        return []
+
+    noticias = []
+    for item in raiz.findall(".//item")[:40]:
+        titulo_bruto = item.findtext("title", default="")
+        link = item.findtext("link", default="")
+        pub_date = item.findtext("pubDate", default="")
+        fonte_tag = item.find("source")
+        fonte = fonte_tag.text if fonte_tag is not None else ""
+
+        if fonte and titulo_bruto.endswith(f" - {fonte}"):
+            titulo = titulo_bruto[: -(len(fonte) + 3)]
+        else:
+            titulo = titulo_bruto
+
+        try:
+            dt_pub = parsedate_to_datetime(pub_date)
+            data_fmt = dt_pub.strftime("%d/%m/%Y %H:%M")
+            ts_ordem = dt_pub.timestamp()
+        except Exception:
+            data_fmt = pub_date
+            ts_ordem = 0.0
+
+        noticias.append({
+            "titulo": titulo,
+            "link": link,
+            "fonte": fonte or "Portal Financeiro",
+            "data": data_fmt,
+            "ts": ts_ordem,
+        })
+
+    # Ordena rigorosamente da notícia mais recente para a mais antiga
+    noticias.sort(key=lambda x: x["ts"], reverse=True)
+    return noticias[:limite]
+
+
+
 st.set_page_config(layout="wide", page_title="Análise Técnica B3 (Brapi)")
 
 st.markdown(
@@ -30,6 +85,38 @@ st.markdown(
             padding-top: 0.15rem;
             padding-bottom: 0.15rem;
             min-height: 2.0rem;
+        }
+        /* Estiliza os 3 botões do cabeçalho da Watchlist como texto clicável (estilo TradingView) */
+        [data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button[kind="tertiary"]) {
+            border-bottom: 1px solid #2A2E39;
+            padding-bottom: 2px;
+            margin-top: 6px;
+            margin-bottom: 8px;
+        }
+        [data-testid="stSidebar"] button[kind="tertiary"] {
+            padding: 0px 2px;
+            min-height: 1.5rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #8A93A6;
+        }
+        [data-testid="stSidebar"] button[kind="tertiary"]:hover {
+            color: #FFFFFF;
+        }
+        /* Tipografia moderna e hover para os títulos das notícias */
+        a.noticia-titulo {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 0.98rem;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+            color: #E2E8F0 !important;
+            text-decoration: none !important;
+            display: inline-block;
+            transition: color 0.15s ease;
+        }
+        a.noticia-titulo:hover {
+            color: #4DA6FF !important;
+            text-decoration: underline !important;
         }
     </style>
     """,
@@ -233,6 +320,8 @@ def executar_varredura_unificada():
 if "df_scanner" not in st.session_state:
     executar_varredura_unificada()
 
+
+
 with st.sidebar:
     st.header("📋 Watchlist B3")
 
@@ -247,26 +336,45 @@ with st.sidebar:
         for _, row in st.session_state["df_scanner"].iterrows():
             mapa_cotacoes[row["Ativo"]] = (row["Fechamento (R$)"], row["Variação (%)"])
 
-    # Controles compactos de ordenação da Watchlist
-    c_ord_campo, c_ord_dir = st.columns([1.6, 1.1])
-    with c_ord_campo:
-        campo_ord_wl = st.selectbox(
-            "Ordenar por",
-            ["Ativo", "Preço", "Var %"],
-            label_visibility="collapsed",
-        )
-    with c_ord_dir:
-        direcao_ord_wl = st.selectbox(
-            "Direção",
-            ["⬆️ Cresc.", "⬇️ Decresc."],
-            label_visibility="collapsed",
-        )
+    # Estado da ordenação clicável (estilo TradingView)
+    if "wl_sort_col" not in st.session_state:
+        st.session_state["wl_sort_col"] = "Ativo"
+        st.session_state["wl_sort_desc"] = False
 
-    reverso_wl = direcao_ord_wl == "⬇️ Decresc."
+    def alternar_ordenacao_wl(coluna: str):
+        if st.session_state["wl_sort_col"] == coluna:
+            st.session_state["wl_sort_desc"] = not st.session_state["wl_sort_desc"]
+        else:
+            st.session_state["wl_sort_col"] = coluna
+            st.session_state["wl_sort_desc"] = coluna in ["Preço", "Var %"]
 
-    if campo_ord_wl == "Ativo":
+    def rotulo_coluna_wl(nome: str, chave: str) -> str:
+        if st.session_state["wl_sort_col"] == chave:
+            seta = "↓" if st.session_state["wl_sort_desc"] else "↑"
+            return f"{nome} {seta}"
+        return nome
+
+    # Cabeçalhos clicáveis alinhados com as 3 colunas da Watchlist
+    h_tk, h_pr, h_vr = st.columns([1.15, 0.85, 0.95])
+    with h_tk:
+        if st.button(rotulo_coluna_wl("Símbolo", "Ativo"), key="hdr_wl_ativo", type="tertiary", width="stretch"):
+            alternar_ordenacao_wl("Ativo")
+            st.rerun()
+    with h_pr:
+        if st.button(rotulo_coluna_wl("Preço", "Preço"), key="hdr_wl_preco", type="tertiary", width="stretch"):
+            alternar_ordenacao_wl("Preço")
+            st.rerun()
+    with h_vr:
+        if st.button(rotulo_coluna_wl("Var%", "Var %"), key="hdr_wl_var", type="tertiary", width="stretch"):
+            alternar_ordenacao_wl("Var %")
+            st.rerun()
+
+    col_ativa_wl = st.session_state["wl_sort_col"]
+    reverso_wl = st.session_state["wl_sort_desc"]
+
+    if col_ativa_wl == "Ativo":
         lista_watchlist = sorted(LISTA_CARTEIRA_B3, reverse=reverso_wl)
-    elif campo_ord_wl == "Preço":
+    elif col_ativa_wl == "Preço":
         lista_watchlist = sorted(
             LISTA_CARTEIRA_B3,
             key=lambda t: mapa_cotacoes[t][0] if t in mapa_cotacoes else (-1.0 if reverso_wl else 999999.0),
@@ -278,29 +386,6 @@ with st.sidebar:
             key=lambda t: mapa_cotacoes[t][1] if t in mapa_cotacoes else (-9999.0 if reverso_wl else 9999.0),
             reverse=reverso_wl,
         )
-
-    # Cabeçalho em linha única com flexbox (alinhamento perfeito e sem sobreposição)
-    st.markdown(
-        """
-        <div style="
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 4px 6px 4px;
-            margin-top: 4px;
-            margin-bottom: 16px;
-            border-bottom: 1px solid #2A2E39;
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: #6C7386;
-        ">
-            <div style="width: 38%; text-align: center;">ATIVO</div>
-            <div style="width: 29%; text-align: right;">PREÇO</div>
-            <div style="width: 33%; text-align: right;">VAR %</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     # Lista interativa em 3 colunas: Ativo | Preço | Variação
     for ticker_w in lista_watchlist:
@@ -332,12 +417,15 @@ with st.sidebar:
             with col_vr:
                 st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
 
-aba_grafico, aba_scanner, aba_subplots, aba_guia = st.tabs([
+aba_grafico, aba_scanner, aba_subplots, aba_noticias, aba_guia = st.tabs([
     "📈 Gráfico Individual",
     "🔍 Scanner de RSI (Carteira)",
     "🗂️ Visão Geral (Subplots 3M)",
+    "📰 Notícias",
     "ℹ️ Guia e Critérios",
 ])
+
+
 
 with aba_grafico:
     # Controles do Gráfico Individual (movidos da Sidebar para a Aba 1)
@@ -480,6 +568,8 @@ with aba_grafico:
         height=660,
     )
 
+
+
 with aba_scanner:
     st.title("Scanner de RSI (14) - Diário (1D)")
     st.caption(f"Exibe os **{len(LISTA_CARTEIRA_B3)} ativos** da carteira em **3mo** (timeframe **1d**). Para atualizar os dados, use o botão na barra lateral.")
@@ -544,6 +634,8 @@ with aba_scanner:
         erros_iniciais = st.session_state.get("erros_scanner", [])
         if erros_iniciais:
             st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
+
+
 
 with aba_subplots:
     st.title("Visão Geral - 3 Meses (Diário)")
@@ -656,6 +748,67 @@ with aba_subplots:
         if erros_iniciais:
             st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
 
+
+
+with aba_noticias:
+    st.title("📰 Radar de Notícias da Carteira")
+    st.caption("Manchetes recentes filtradas por ativo ou panorama geral da B3 (cache de 15 minutos).")
+
+    col_n1, col_n2 = st.columns([1.4, 2])
+    with col_n1:
+        modo_noticia = st.radio(
+            "Escopo das notícias:",
+            ["Ativo Selecionado", "Panorama Carteira / Ibovespa"],
+            horizontal=True,
+        )
+    with col_n2:
+        opcoes_n = LISTA_CARTEIRA_B3 + ["Outro (digitar)..."]
+        idx_n = (
+            LISTA_CARTEIRA_B3.index(st.session_state["ativo_selecionado"])
+            if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
+            else 0
+        )
+        if modo_noticia == "Ativo Selecionado":
+            ticker_noticia = st.selectbox(
+                "Filtrar manchetes do ativo:",
+                LISTA_CARTEIRA_B3,
+                index=idx_n,
+            )
+            termo_busca = f"{ticker_noticia} ações OR B3 when:7d"
+
+        else:
+            ticker_noticia = "Ibovespa / Carteira B3"
+            termo_busca = "Ibovespa OR B3 OR dólar when:1d"
+
+    lista_noticias = buscar_noticias_rss(termo_busca, limite=12)
+
+
+    if not lista_noticias:
+        st.warning(f"Nenhuma notícia recente encontrada para **{ticker_noticia}** no momento.")
+    else:
+        for n in lista_noticias:
+            st.markdown(
+                f"""
+                <div style="
+                    padding: 8px 4px;
+                    border-bottom: 1px solid #2A2E39;
+                    line-height: 1.38;
+                ">
+                    <a class="noticia-titulo" href="{n['link']}" target="_blank">{n['titulo']}</a>
+                    <div style="
+                        color: #8A93A6;
+                        font-size: 0.78rem;
+                        margin-top: 3px;
+                    ">
+                        🗞️ {n['fonte']} &nbsp;•&nbsp; 🕒 {n['data']}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+
 with aba_guia:
     st.title("ℹ️ Guia de Uso e Critérios Técnicos")
     st.markdown(
@@ -666,11 +819,11 @@ with aba_guia:
     st.divider()
 
     # 1. Barra Lateral (Watchlist B3)
-    st.header("1. Barra Lateral (Watchlist B3)")
+    st.header(":blue[Painel Lateral (Watchlist B3)]")
     st.markdown(
         r"""
         * **Lista Interativa de Ativos:** Exibe os **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`) com cotação de fechamento e variação diária. Clicar em qualquer ativo carrega imediatamente seu gráfico na **Aba 1**.
-        * **Ordenação Dinâmica:** Permite ordenar a lista por **Ativo**, **Preço** ou **Var %** em ordem crescente ou decrescente.
+        * **Ordenação Clicável (Estilo TradingView):** Clique diretamente nos títulos das colunas (**Símbolo**, **Preço** ou **Var%**) para alternar entre ordem crescente (`↑`) e decrescente (`↓`).
         * **Carregamento Automático e Atualização:** Ao abrir o aplicativo, todas as cotações são carregadas automaticamente. Para buscar preços atualizados durante o pregão, utilize o botão **🔄 Atualizar Cotações** no topo da barra lateral (ele limpa o cache e sincroniza a Watchlist, o Scanner e a Grade de Gráficos de uma só vez).
         """
     )
@@ -678,7 +831,7 @@ with aba_guia:
     st.divider()
 
     # 2. Abas do Sistema
-    st.header("2. Estrutura das Abas")
+    st.header(":blue[Estrutura das Abas]")
 
     col_g1, col_g2 = st.columns(2)
 
@@ -706,20 +859,34 @@ with aba_guia:
                 """
             )
 
-    with st.container(border=True):
-        st.subheader("🗂️ Aba 3: Visão Geral (Subplots 3M)")
-        st.markdown(
-            r"""
-            Apresenta uma grade visual limpa (**3 gráficos por linha**) com os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
-            * **Cabeçalho de cada Card:** Mostra o código do ativo, preço de fechamento, **variação percentual diária** (verde para alta, vermelho para queda) e o valor atual do **IFR (14)** destacado em cor quando atinge extremos.
-            * **Controles:** Permite filtrar por zonas de IFR (*Sobrevenda*, *Sobrecompra* ou *Extremos*) e ordenar os gráficos por *Ordem Alfabética*, *Maior Alta do Dia*, *Maior Queda do Dia* ou *Menor IFR*.
-            """
-        )
+    col_g3, col_g4 = st.columns(2)
+
+    with col_g3:
+        with st.container(border=True):
+            st.subheader("🗂️ Aba 3: Visão Geral (Subplots 3M)")
+            st.markdown(
+                r"""
+                Apresenta uma grade visual limpa (**3 gráficos por linha**) com os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
+                * **Cabeçalho de cada Card:** Mostra o código do ativo, preço de fechamento, **variação percentual diária** e o valor atual do **IFR (14)** destacado em cor quando atinge extremos.
+                * **Controles:** Permite filtrar por zonas de IFR (*Sobrevenda*, *Sobrecompra* ou *Extremos*) e ordenar os gráficos por *Ordem Alfabética*, *Maior Alta*, *Maior Queda* ou *Menor IFR*.
+                """
+            )
+
+    with col_g4:
+        with st.container(border=True):
+            st.subheader("📰 Aba 4: Notícias")
+            st.markdown(
+                r"""
+                Feed integrado de manchetes financeiras via **Google News RSS** (com cache de **15 minutos**):
+                * **Ativo Selecionado:** Exibe as notícias mais recentes dos **últimos 7 dias** referentes ao papel escolhido (já sincronizado com a Watchlist).
+                * **Panorama Carteira / Ibovespa:** Traz as manchetes das **últimas 24 horas** sobre o Ibovespa, B3 e câmbio, ordenadas da mais recente para a mais antiga.
+                """
+            )
 
     st.divider()
 
     # 3. Metodologia dos Indicadores
-    st.header("3. Critérios e Metodologia dos Indicadores")
+    st.header(":blue[Critérios e Metodologia dos Indicadores]")
 
     st.markdown(
         r"""
