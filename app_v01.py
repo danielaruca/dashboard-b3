@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -60,6 +60,44 @@ def buscar_noticias_rss(consulta: str, limite: int = 12) -> list[dict]:
     noticias.sort(key=lambda x: x["ts"], reverse=True)
     return noticias[:limite]
 
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def buscar_serie_bcb(codigo_serie: int, dias_atras: int = 400) -> list[dict]:
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    inicio = hoje - timedelta(days=dias_atras)
+    url = "/".join([
+        "https://api.bcb.gov.br",
+        "dados",
+        "serie",
+        f"bcdata.sgs.{codigo_serie}",
+        "dados",
+    ])
+    params = {
+        "formato": "json",
+        "dataInicial": inicio.strftime("%d/%m/%Y"),
+        "dataFinal": hoje.strftime("%d/%m/%Y"),
+    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=12)
+        resp.raise_for_status()
+        dados = resp.json()
+        return dados if isinstance(dados, list) else []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def buscar_cambio_e_ouro() -> dict:
+    pares = "USD-BRL,EUR-BRL,BTC-BRL,XAU-BRL,XAU-USD"
+    host = ".".join(["economia", "awesomeapi", "com", "br"])
+    url = "/".join([f"https://{host}", "json", "last", pares])
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return {}
 
 
 st.set_page_config(layout="wide", page_title="Análise Técnica B3 (Brapi)")
@@ -331,6 +369,19 @@ if "df_scanner" not in st.session_state:
     executar_varredura_unificada()
 
 
+# Configurações padrão da Central de Alertas
+if "cfg_alertas" not in st.session_state:
+    st.session_state["cfg_alertas"] = {
+        "rsi_sobrevenda": 30.0,
+        "rsi_sobrecompra": 70.0,
+        "vol_minimo": 150.0,
+        "mon_ema_9_21": True,
+        "mon_ema_17_72": True,
+    }
+
+if "alertas_preco" not in st.session_state:
+    st.session_state["alertas_preco"] = []
+
 
 with st.sidebar:
     st.header("📋 Watchlist B3")
@@ -349,12 +400,44 @@ with st.sidebar:
         )
 
 
-
-    # Busca preços e variações já carregados na sessão (sem custo extra de API)
+    # Busca preços, variações e gatilhos técnicos já carregados na sessão
     mapa_cotacoes = {}
+    mapa_badges_wl = {}
+    cfg_a = st.session_state["cfg_alertas"]
+
+    # Mapeia alvos de preço atingidos
+    alvos_atingidos = set()
     if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
+        precos_atuais_map = dict(
+            zip(st.session_state["df_scanner"]["Ativo"], st.session_state["df_scanner"]["Fechamento (R$)"])
+        )
+        for ap in st.session_state["alertas_preco"]:
+            p_agora = precos_atuais_map.get(ap["ativo"])
+            if p_agora is not None:
+                if (ap["condicao"] == "≥" and p_agora >= ap["alvo"]) or (ap["condicao"] == "≤" and p_agora <= ap["alvo"]):
+                    alvos_atingidos.add(ap["ativo"])
+
         for _, row in st.session_state["df_scanner"].iterrows():
-            mapa_cotacoes[row["Ativo"]] = (row["Fechamento (R$)"], row["Variação (%)"])
+            tk = row["Ativo"]
+            mapa_cotacoes[tk] = (row["Fechamento (R$)"], row["Variação (%)"])
+
+            # Define ícone de destaque prioritário na Watchlist
+            rsi_val_row = float(row["RSI (14)"])
+            vol_num = float(str(row["Vol. vs MM20"]).replace("🔥", "").replace("%", "").strip() or 0)
+            cruz_9_21 = cfg_a["mon_ema_9_21"] and row["EMA 9/21 (3D)"] != "➖ Sem cruzamento"
+            cruz_17_72 = cfg_a["mon_ema_17_72"] and row["EMA 17/72 (3D)"] != "➖ Sem cruzamento"
+
+            if tk in alvos_atingidos:
+                mapa_badges_wl[tk] = "🎯"
+            elif rsi_val_row <= cfg_a["rsi_sobrevenda"]:
+                mapa_badges_wl[tk] = "🟢"
+            elif rsi_val_row >= cfg_a["rsi_sobrecompra"]:
+                mapa_badges_wl[tk] = "🔴"
+            elif cruz_9_21 or cruz_17_72:
+                mapa_badges_wl[tk] = "⚡"
+            elif vol_num >= cfg_a["vol_minimo"]:
+                mapa_badges_wl[tk] = "🔥"
+
 
     # Estado da ordenação clicável (estilo TradingView)
     if "wl_sort_col" not in st.session_state:
@@ -407,13 +490,14 @@ with st.sidebar:
             reverse=reverso_wl,
         )
 
-    # Lista interativa em 3 colunas: Ativo | Preço | Variação
     for ticker_w in lista_watchlist:
         col_tk, col_pr, col_vr = st.columns([1.15, 0.85, 0.95])
 
         with col_tk:
             destaque = "primary" if st.session_state["ativo_selecionado"] == ticker_w else "secondary"
-            if st.button(ticker_w, key=f"wl_{ticker_w}", type=destaque, width="stretch"):
+            badge_w = mapa_badges_wl.get(ticker_w, "")
+            rotulo_btn = f"{ticker_w} {badge_w}".strip()
+            if st.button(rotulo_btn, key=f"wl_{ticker_w}", type=destaque, width="stretch"):
                 st.session_state["ativo_selecionado"] = ticker_w
                 st.rerun()
 
@@ -437,11 +521,13 @@ with st.sidebar:
             with col_vr:
                 st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
 
-aba_grafico, aba_scanner, aba_subplots, aba_noticias, aba_guia = st.tabs([
+aba_grafico, aba_scanner, aba_subplots, aba_mercado, aba_noticias, aba_alertas, aba_guia = st.tabs([
     "📈 Gráfico Individual",
     "🔍 Scanner de RSI (Carteira)",
     "🗂️ Visão Geral (Subplots 3M)",
+    "🌐 Mercado",
     "📰 Notícias",
+    "🔔 Alertas",
     "ℹ️ Guia e Critérios",
 ])
 
@@ -770,6 +856,215 @@ with aba_subplots:
 
 
 
+with aba_mercado:
+    st.title("🌐 Indicadores de Mercado & Macroeconomia")
+    st.caption("Panorama macroeconômico (Banco Central), câmbio, ouro, juros futuros DI e benchmarks (B3 & EUA).")
+
+    # --- 1. MACRO BRASIL & JUROS FUTUROS DI (BANCO CENTRAL) ---
+    st.subheader("🇧🇷 Juros, Inflação & Juro Real (Banco Central)")
+
+    selic_dados = buscar_serie_bcb(432, dias_atras=720)       # Meta Selic (% a.a.)
+    cdi_dados = buscar_serie_bcb(4389, dias_atras=720)        # CDI Anualizado (% a.a.)
+    ipca_dados = buscar_serie_bcb(433, dias_atras=400)[-12:]  # Últimos 12 meses do IPCA
+
+    selic_val = float(selic_dados[-1]["valor"]) if selic_dados else 0.0
+    cdi_val = float(cdi_dados[-1]["valor"]) if cdi_dados else 0.0
+
+    # Cálculo composto do IPCA acumulado nos últimos 12 meses
+    ipca_12m = 0.0
+    ipca_mes = 0.0
+    if ipca_dados:
+        ipca_mes = float(ipca_dados[-1]["valor"])
+        fator_ipca = 1.0
+        for item_ipca in ipca_dados:
+            fator_ipca *= 1 + (float(item_ipca["valor"]) / 100.0)
+        ipca_12m = (fator_ipca - 1.0) * 100.0
+
+    # Cálculo do Juro Real Ex-Post (Equação de Fisher: CDI descontado do IPCA 12M)
+    juro_real = (((1.0 + cdi_val / 100.0) / (1.0 + ipca_12m / 100.0)) - 1.0) * 100.0 if ipca_12m > -100 else 0.0
+    spread_simples = cdi_val - ipca_12m
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Taxa Selic Meta", f"{selic_val:.2f}% a.a.", border=True)
+    m2.metric("CDI Anualizado", f"{cdi_val:.2f}% a.a.", border=True)
+    m3.metric(
+        "IPCA (Acum. 12M)",
+        f"{ipca_12m:.2f}%",
+        delta=f"Último mês: {ipca_mes:+.2f}%",
+        delta_color="off",
+        border=True,
+    )
+    m4.metric(
+        "Juro Real (CDI − IPCA)",
+        f"{juro_real:.2f}% a.a.",
+        delta=f"Spread nominal: {spread_simples:+.2f} p.p.",
+        delta_color="off",
+        border=True,
+    )
+
+    st.divider()
+
+    # --- 2. CÂMBIO, OURO & COMMODITIES ---
+    st.subheader("💱 Câmbio, Ouro & Commodities")
+
+    cotacoes_fx = buscar_cambio_e_ouro()
+
+    def extrair_fx(chave: str):
+        item = cotacoes_fx.get(chave, {})
+        bid = float(item.get("bid", 0.0))
+        pct = float(item.get("pctChange", 0.0))
+        return bid, pct
+
+    usd_val, usd_pct = extrair_fx("USDBRL")
+    eur_val, eur_pct = extrair_fx("EURBRL")
+    btc_val, btc_pct = extrair_fx("BTCBRL")
+    xau_usd, xau_pct = extrair_fx("XAUUSD")
+
+    # Busca proxy de Petróleo Brent / Óleo na B3 (OILB39) e Ouro na B3 (GOLD11)
+    df_gold11, _ = carregar_dados_brapi("GOLD11", "3mo", "1d", token_brapi)
+    df_oil, _ = carregar_dados_brapi("OILB39", "3mo", "1d", token_brapi)
+
+    def resumo_ativo_b3(df_temp: pd.DataFrame):
+        if df_temp.empty or len(df_temp) < 2:
+            return 0.0, 0.0
+        ult_p = float(df_temp.iloc[-1]["close"])
+        ant_p = float(df_temp.iloc[-2]["close"])
+        return ult_p, ((ult_p - ant_p) / ant_p) * 100.0
+
+    gold11_val, gold11_pct = resumo_ativo_b3(df_gold11)
+    oil_val, oil_pct = resumo_ativo_b3(df_oil)
+
+    c_fx1, c_fx2, c_fx3, c_fx4, c_fx5 = st.columns(5)
+    c_fx1.metric("Dólar (USD/BRL)", f"R$ {usd_val:.2f}", delta=f"{usd_pct:+.2f}%", border=True)
+    c_fx2.metric("Euro (EUR/BRL)", f"R$ {eur_val:.2f}", delta=f"{eur_pct:+.2f}%", border=True)
+    c_fx3.metric(
+        "Ouro Spot (Oz)",
+        f"US$ {xau_usd:,.2f}" if xau_usd > 0 else f"R$ {gold11_val:.2f}",
+        delta=f"{xau_pct:+.2f}%" if xau_usd > 0 else f"{gold11_pct:+.2f}%",
+        border=True,
+    )
+    c_fx4.metric("Petróleo Brent (OILB39)", f"R$ {oil_val:.2f}", delta=f"{oil_pct:+.2f}%", border=True)
+    c_fx5.metric("Bitcoin (BTC/BRL)", f"R$ {btc_val:,.0f}".replace(",", "."), delta=f"{btc_pct:+.2f}%", border=True)
+
+    st.divider()
+
+    # --- 3. GRÁFICOS DE REFERÊNCIA (3 MESES - DIÁRIO) ---
+    st.subheader("📊 Benchmarks de Mercado (3 Meses • Diário)")
+
+    benchmarks = [
+        ("Ibovespa (BOVA11)", "BOVA11"),
+        ("S&P 500 Brasil (IVVB11)", "IVVB11"),
+        ("Ouro B3 (GOLD11)", "GOLD11"),
+    ]
+
+    layout_bench = {
+        "layout": {"background": {"color": "#131722"}, "textColor": "#D1D4DC"},
+        "grid": {
+            "vertLines": {"color": "rgba(42, 46, 57, 0.5)"},
+            "horzLines": {"color": "rgba(42, 46, 57, 0.5)"},
+        },
+        "timeScale": {
+            "barSpacing": 5,
+            "rightOffset": 2,
+            "fixLeftEdge": True,
+            "fixRightEdge": True,
+        },
+    }
+
+    serie_di_3m = []
+    for item_d in cdi_dados:
+        try:
+            dt_iso = datetime.strptime(item_d["data"], "%d/%m/%Y").strftime("%Y-%m-%d")
+            serie_di_3m.append({"time": dt_iso, "value": float(item_d["valor"])})
+        except Exception:
+            pass
+
+    for idx_b in range(0, 4, 2):
+        cols_b = st.columns(2)
+        for j_b in range(2):
+            pos = idx_b + j_b
+            with cols_b[j_b]:
+                if pos < len(benchmarks):
+                    titulo_b, ticker_b = benchmarks[pos]
+                    df_b, err_b = carregar_dados_brapi(ticker_b, "3mo", "1d", token_brapi)
+                    if not df_b.empty and len(df_b) >= 2:
+                        p_fim, v_dia = resumo_ativo_b3(df_b)
+                        rsi_b = float(df_b.iloc[-1]["RSI"])
+                        cor_b = "green" if v_dia >= 0 else "red"
+                        st.markdown(
+                            f"**{titulo_b}** | R$ {p_fim:.2f} :{cor_b}[**({v_dia:+.2f}%)**] | IFR: {rsi_b:.1f}"
+                        )
+                        candles_b = [
+                            {
+                                "time": r["time"],
+                                "open": float(r["open"]),
+                                "high": float(r["high"]),
+                                "low": float(r["low"]),
+                                "close": float(r["close"]),
+                            }
+                            for _, r in df_b.iterrows()
+                        ]
+                        lightweight_charts_v5_component(
+                            name=f"bench_3m_{ticker_b}",
+                            charts=[
+                                {
+                                    "chart": layout_bench,
+                                    "height": 270,
+                                    "series": [
+                                        {
+                                            "type": "Candlestick",
+                                            "data": candles_b,
+                                            "options": {
+                                                "upColor": "#26A69A",
+                                                "downColor": "#EF5350",
+                                                "borderVisible": False,
+                                                "wickUpColor": "#26A69A",
+                                                "wickDownColor": "#EF5350",
+                                            },
+                                        },
+                                    ],
+                                }
+                            ],
+                            height=270,
+                        )
+                    else:
+                        st.warning(f"Não foi possível carregar **{titulo_b}**: {err_b}")
+                else:
+                    # 4º Quadrante: Histórico da Taxa DI / CDI (Banco Central - Série 4389)
+                    if len(serie_di_3m) >= 2:
+                        taxa_atual_di = serie_di_3m[-1]["value"]
+                        taxa_ant_di = serie_di_3m[-2]["value"]
+                        diff_di = taxa_atual_di - taxa_ant_di
+                        cor_di = "red" if diff_di > 0 else "green"
+                        st.markdown(
+                            f"**Taxa DI / CDI (2 Anos • BCB)** | {taxa_atual_di:.2f}% a.a. :{cor_di}[**({diff_di:+.2f} p.p.)**]"
+                        )
+                        lightweight_charts_v5_component(
+                            name="bench_3m_di_360",
+                            charts=[
+                                {
+                                    "chart": layout_bench,
+                                    "height": 270,
+                                    "series": [
+                                        {
+                                            "type": "Line",
+                                            "data": serie_di_3m,
+                                            "options": {
+                                                "color": "#FFA726",
+                                                "lineWidth": 2,
+                                                "title": "DI (% a.a.)",
+                                            },
+                                        },
+                                    ],
+                                }
+                            ],
+                            height=270,
+                        )
+                    else:
+                        st.warning("Histórico da taxa DI indisponível no Banco Central.")
+
+
+
 with aba_noticias:
     st.title("📰 Radar de Notícias da Carteira")
     st.caption("Manchetes recentes filtradas por ativo ou panorama geral da B3 (cache de 15 minutos).")
@@ -828,6 +1123,211 @@ with aba_noticias:
             )
 
 
+with aba_alertas:
+    st.title("🔔 Central de Alertas & Gatilhos Técnicos")
+    st.caption("Monitoramento automático da carteira B3 e alertas personalizados de preço-alvo.")
+
+    # --- 1. CONFIGURAÇÃO DOS GATILHOS TÉCNICOS ---
+    with st.expander("⚙️ Configurar Parâmetros dos Gatilhos Técnicos", expanded=False):
+        c_cfg1, c_cfg2, c_cfg3 = st.columns(3)
+        with c_cfg1:
+            novo_sv = st.number_input(
+                "IFR Sobrevenda (≤)",
+                min_value=5.0,
+                max_value=45.0,
+                value=float(st.session_state["cfg_alertas"]["rsi_sobrevenda"]),
+                step=1.0,
+            )
+        with c_cfg2:
+            novo_sc = st.number_input(
+                "IFR Sobrecompra (≥)",
+                min_value=55.0,
+                max_value=95.0,
+                value=float(st.session_state["cfg_alertas"]["rsi_sobrecompra"]),
+                step=1.0,
+            )
+        with c_cfg3:
+            novo_vol = st.number_input(
+                "Volume Relativo Mínimo (%)",
+                min_value=100.0,
+                max_value=500.0,
+                value=float(st.session_state["cfg_alertas"]["vol_minimo"]),
+                step=10.0,
+            )
+
+        c_chk1, c_chk2, c_btn_cfg = st.columns([1.2, 1.2, 1])
+        with c_chk1:
+            mon_9_21 = st.checkbox(
+                "Alertar Cruzamento EMA 9/21 (3D)",
+                value=st.session_state["cfg_alertas"]["mon_ema_9_21"],
+            )
+        with c_chk2:
+            mon_17_72 = st.checkbox(
+                "Alertar Cruzamento EMA 17/72 (3D)",
+                value=st.session_state["cfg_alertas"]["mon_ema_17_72"],
+            )
+        with c_btn_cfg:
+            if st.button("💾 Aplicar Regras", width="stretch"):
+                st.session_state["cfg_alertas"] = {
+                    "rsi_sobrevenda": novo_sv,
+                    "rsi_sobrecompra": novo_sc,
+                    "vol_minimo": novo_vol,
+                    "mon_ema_9_21": mon_9_21,
+                    "mon_ema_17_72": mon_17_72,
+                }
+                st.rerun()
+
+    # --- 2. ALERTAS PERSONALIZADOS DE PREÇO-ALVO ---
+    with st.expander("🎯 Criar Alerta de Preço-Alvo (R$)", expanded=False):
+        ca1, ca2, ca3, ca4 = st.columns([1.3, 1.1, 1.1, 1])
+        with ca1:
+            alvo_ativo = st.selectbox("Ativo:", LISTA_CARTEIRA_B3, key="sel_alvo_ativo")
+        with ca2:
+            alvo_cond = st.selectbox("Condição:", ["≥ (Romper Alta)", "≤ (Cair Abaixo)"], key="sel_alvo_cond")
+        with ca3:
+            preco_sug = mapa_cotacoes.get(alvo_ativo, (20.0, 0.0))[0]
+            alvo_preco = st.number_input("Preço Alvo (R$):", min_value=0.01, value=float(round(preco_sug, 2)), step=0.10)
+        with ca4:
+            st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("➕ Adicionar Alerta", width="stretch"):
+                simbolo_cond = "≥" if "≥" in alvo_cond else "≤"
+                st.session_state["alertas_preco"].append({
+                    "ativo": alvo_ativo,
+                    "condicao": simbolo_cond,
+                    "alvo": float(alvo_preco),
+                })
+                st.rerun()
+
+        if st.session_state["alertas_preco"]:
+            st.markdown("**Alertas de preço cadastrados nesta sessão:**")
+            for idx_ap, ap in enumerate(st.session_state["alertas_preco"]):
+                col_ap_txt, col_ap_del = st.columns([4, 1])
+                p_atual_ap = mapa_cotacoes.get(ap["ativo"], (0.0, 0.0))[0]
+                atingiu = (ap["condicao"] == "≥" and p_atual_ap >= ap["alvo"]) or (ap["condicao"] == "≤" and p_atual_ap <= ap["alvo"])
+                status_ap = "🎯 **ATINGIDO!**" if atingiu else "⏳ Aguardando"
+                col_ap_txt.write(
+                    f"• **{ap['ativo']}** {ap['condicao']} **R$ {ap['alvo']:.2f}** (Atual: R$ {p_atual_ap:.2f}) — {status_ap}"
+                )
+                if col_ap_del.button("🗑️ Remover", key=f"del_ap_{idx_ap}", width="stretch"):
+                    st.session_state["alertas_preco"].pop(idx_ap)
+                    st.rerun()
+
+    st.divider()
+
+    # --- 3. PAINEL DE GATILHOS DISPARADOS NA CARTEIRA ---
+    if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
+        df_al = st.session_state["df_scanner"].copy()
+        cfg = st.session_state["cfg_alertas"]
+        lista_disparos = []
+
+        # Verifica alertas de preço atingidos
+        for ap in st.session_state["alertas_preco"]:
+            p_agora = mapa_cotacoes.get(ap["ativo"], (None, 0.0))[0]
+            if p_agora is not None:
+                if (ap["condicao"] == "≥" and p_agora >= ap["alvo"]) or (ap["condicao"] == "≤" and p_agora <= ap["alvo"]):
+                    lista_disparos.append({
+                        "ativo": ap["ativo"],
+                        "tipo": "🎯 Preço-Alvo",
+                        "cor": "#FFD54F",
+                        "preco": p_agora,
+                        "var": mapa_cotacoes[ap["ativo"]][1],
+                        "descricao": f"Cotação atual (R$ {p_agora:.2f}) atingiu o alvo {ap['condicao']} R$ {ap['alvo']:.2f}.",
+                    })
+
+        # Verifica gatilhos técnicos nos 29 ativos
+        for _, r in df_al.iterrows():
+            tk = r["Ativo"]
+            fech_r = float(r["Fechamento (R$)"])
+            var_r = float(r["Variação (%)"])
+            rsi_r = float(r["RSI (14)"])
+            vol_r = float(str(r["Vol. vs MM20"]).replace("🔥", "").replace("%", "").strip() or 0)
+
+            if rsi_r <= cfg["rsi_sobrevenda"]:
+                lista_disparos.append({
+                    "ativo": tk,
+                    "tipo": "🟢 Sobrevenda (IFR)",
+                    "cor": "#26A69A",
+                    "preco": fech_r,
+                    "var": var_r,
+                    "descricao": f"IFR (14) em {rsi_r:.2f} (abaixo do limite de {cfg['rsi_sobrevenda']:.0f}).",
+                })
+            elif rsi_r >= cfg["rsi_sobrecompra"]:
+                lista_disparos.append({
+                    "ativo": tk,
+                    "tipo": "🔴 Sobrecompra (IFR)",
+                    "cor": "#EF5350",
+                    "preco": fech_r,
+                    "var": var_r,
+                    "descricao": f"IFR (14) em {rsi_r:.2f} (acima do limite de {cfg['rsi_sobrecompra']:.0f}).",
+                })
+
+            if cfg["mon_ema_9_21"] and r["EMA 9/21 (3D)"] != "➖ Sem cruzamento":
+                lista_disparos.append({
+                    "ativo": tk,
+                    "tipo": "⚡ Cruzamento EMA 9/21",
+                    "cor": "#4DA6FF",
+                    "preco": fech_r,
+                    "var": var_r,
+                    "descricao": f"Sinal recente nos últimos 3 pregões: {r['EMA 9/21 (3D)']}.",
+                })
+
+            if cfg["mon_ema_17_72"] and r["EMA 17/72 (3D)"] != "➖ Sem cruzamento":
+                lista_disparos.append({
+                    "ativo": tk,
+                    "tipo": "⚡ Cruzamento EMA 17/72",
+                    "cor": "#FFA726",
+                    "preco": fech_r,
+                    "var": var_r,
+                    "descricao": f"Sinal recente nos últimos 3 pregões: {r['EMA 17/72 (3D)']}.",
+                })
+
+            if vol_r >= cfg["vol_minimo"]:
+                lista_disparos.append({
+                    "ativo": tk,
+                    "tipo": "🔥 Volume Anormal",
+                    "cor": "#FF7043",
+                    "preco": fech_r,
+                    "var": var_r,
+                    "descricao": f"Volume financeiro em {vol_r:.0f}% da média de 20 dias (gatilho ≥ {cfg['vol_minimo']:.0f}%).",
+                })
+
+        # Resumo no topo da aba
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Total de Alertas Ativos", len(lista_disparos), border=True)
+        k2.metric("Ativos Sinalizados", len({d["ativo"] for d in lista_disparos}), border=True)
+        k3.metric("Alertas de Preço-Alvo", len(st.session_state["alertas_preco"]), border=True)
+
+        if not lista_disparos:
+            st.info("Nenhum gatilho técnico disparado na carteira com os parâmetros atuais.")
+        else:
+            filtro_tipo_alerta = st.radio(
+                "Filtrar alertas por categoria:",
+                ["Todos", "🎯 Preço-Alvo", "🟢 Sobrevenda (IFR)", "🔴 Sobrecompra (IFR)", "⚡ Cruzamento EMA", "🔥 Volume Anormal"],
+                horizontal=True,
+            )
+
+            for idx_d, d in enumerate(lista_disparos):
+                if filtro_tipo_alerta != "Todos" and not d["tipo"].startswith(filtro_tipo_alerta):
+                    continue
+
+                with st.container(border=True):
+                    c_info, c_acao = st.columns([4.5, 1])
+                    with c_info:
+                        cor_v = "green" if d["var"] >= 0 else "red"
+                        st.markdown(
+                            f"**{d['ativo']}** &nbsp;|&nbsp; <span style='color:{d['cor']}; font-weight:600;'>{d['tipo']}</span> "
+                            f"&nbsp;|&nbsp; R$ {d['preco']:.2f} :{cor_v}[**({d['var']:+.2f}%)**]",
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(d["descricao"])
+                    with c_acao:
+                        if st.button("📈 Selecionar", key=f"btn_al_{idx_d}_{d['ativo']}", width="stretch"):
+                            st.session_state["ativo_selecionado"] = d["ativo"]
+                            st.rerun()
+    else:
+        st.info("Nenhum dado carregado no momento. Clique em **🔄 Atualizar Cotações** na barra lateral.")
+
+
 
 with aba_guia:
     st.title("ℹ️ Guia de Uso e Critérios Técnicos")
@@ -844,7 +1344,7 @@ with aba_guia:
         r"""
         * **Lista Interativa de Ativos:** Exibe os **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`) com cotação de fechamento e variação diária. Clicar em qualquer ativo carrega imediatamente seu gráfico na **Aba 1**.
         * **Ordenação Clicável (Estilo TradingView):** Clique diretamente nos títulos das colunas (**Símbolo**, **Preço** ou **Var%**) para alternar entre ordem crescente (`↑`) e decrescente (`↓`).
-        * **Carregamento Automático e Atualização:** Ao abrir o aplicativo, todas as cotações são carregadas automaticamente. Para buscar preços atualizados durante o pregão, utilize o botão **🔄 Atualizar Cotações** no topo da barra lateral (ele limpa o cache e sincroniza a Watchlist, o Scanner e a Grade de Gráficos de uma só vez).
+        * **Carregamento Automático e Horário de Leitura:** Ao abrir o aplicativo, todas as cotações são carregadas automaticamente com registro de data e hora no fuso de Brasília (**🕒 Última leitura**). O botão **🔄 Atualizar Cotações** limpa o cache e sincroniza toda a carteira.
         """
     )
 
@@ -894,7 +1394,21 @@ with aba_guia:
 
     with col_g4:
         with st.container(border=True):
-            st.subheader("📰 Aba 4: Notícias")
+            st.subheader("🌐 Aba 4: Mercado")
+            st.markdown(
+                r"""
+                Painel macroeconômico e de benchmarks globais:
+                * **Juros & Inflação (Banco Central):** Exibe **Selic Meta**, **CDI Anualizado**, **IPCA acumulado em 12 meses** e o **Juro Real (CDI − IPCA)** via Equação de Fisher.
+                * **Câmbio & Commodities:** Acompanha **Dólar (USD/BRL)**, **Euro (EUR/BRL)**, **Ouro Spot**, **Petróleo Brent (`OILB39`)** e **Bitcoin (`BTC/BRL`)**.
+                * **Gráficos de Referência:** Exibe **Ibovespa (`BOVA11`)**, **S&P 500 (`IVVB11`)**, **Ouro B3 (`GOLD11`)** e a curva histórica da **Taxa DI / CDI (720 dias)**.
+                """
+            )
+
+    col_g5, col_g6 = st.columns(2)
+
+    with col_g5:
+        with st.container(border=True):
+            st.subheader("📰 Aba 5: Notícias")
             st.markdown(
                 r"""
                 Feed integrado de manchetes financeiras via **Google News RSS** (com cache de **15 minutos**):
@@ -903,6 +1417,18 @@ with aba_guia:
                 """
             )
 
+    with col_g6:
+        with st.container(border=True):
+            st.subheader("🔔 Aba 6: Alertas")
+            st.markdown(
+                r"""
+                Central de monitoramento e sinalização automática na Watchlist:
+                * **Destaques na Watchlist:** Exibe ícones diretamente nos ativos sinalizados (`🎯` Alvo de Preço, `🟢` Sobrevenda, `🔴` Sobrecompra, `⚡` Cruzamento de EMA e `🔥` Volume Anormal).
+                * **Regras & Preços-Alvo:** Permite ajustar os limites de IFR/Volume e cadastrar alertas personalizados em **R$** com seleção direta para o gráfico.
+                """
+            )
+
+ 
     st.divider()
 
     # 3. Metodologia dos Indicadores
@@ -918,6 +1444,7 @@ with aba_guia:
         | **Cruzamento EMA 9/21** | Médias Móveis Exponenciais de **9** e **21** períodos verificadas nos **últimos 3 pregões**. | **🟢 Cruzou p/ Cima:** EMA 9 superou a EMA 21 \| **🔴 Cruzou p/ Baixo:** EMA 9 perdeu a EMA 21. |
         | **Cruzamento EMA 17/72** | Médias Móveis Exponenciais de **17** e **72** períodos verificadas nos **últimos 3 pregões**. | **🟢 Cruzou p/ Cima:** EMA 17 superou a EMA 72 \| **🔴 Cruzou p/ Baixo:** EMA 17 perdeu a EMA 72. |
         | **Volume Relativo** | Comparação entre o volume financeiro do último pregão e a **Média Móvel Simples de 20 dias (MM20)**. | **🔥 Alerta de Volume:** Sinalizado quando o volume do dia é **≥ 150%** da média de 20 dias. |
+        | **Juro Real (Fisher)** | `((1 + CDI) / (1 + IPCA_12M) - 1) × 100` com séries oficiais do Banco Central (SGS). | Mede o retorno real anualizado acima da inflação acumulada nos últimos 12 meses. |
         """
     )
 
