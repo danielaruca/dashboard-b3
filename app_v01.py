@@ -1,4 +1,7 @@
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -316,6 +319,13 @@ def executar_varredura_unificada():
     st.session_state["dados_grade_3m"] = dados_grade
     st.session_state["erros_scanner"] = erros_scan
 
+    barra.empty()
+    st.session_state["df_scanner"] = pd.DataFrame(resultados_scan)
+    st.session_state["dados_grade_3m"] = dados_grade
+    st.session_state["erros_scanner"] = erros_scan
+    st.session_state["ultima_atualizacao"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
+
+
 # Carrega os preços da Watchlist, Scanner e Subplots automaticamente na primeira abertura
 if "df_scanner" not in st.session_state:
     executar_varredura_unificada()
@@ -329,6 +339,16 @@ with st.sidebar:
         _requisitar_brapi.clear()
         executar_varredura_unificada()
         st.rerun()
+
+    if "ultima_atualizacao" in st.session_state:
+        st.markdown(
+            f'<div style="text-align: center; font-size: 0.75rem; color: #e80505; font-weight: 500; margin-top: 2px; margin-bottom: 4px;">'
+            f'🕒 Última leitura: {st.session_state["ultima_atualizacao"]}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 
     # Busca preços e variações já carregados na sessão (sem custo extra de API)
     mapa_cotacoes = {}
