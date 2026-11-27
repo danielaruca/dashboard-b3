@@ -171,15 +171,60 @@ def buscar_serie_bcb(codigo_serie: int, dias_atras: int = 400) -> list[dict]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def buscar_cambio_e_ouro() -> dict:
-    pares = "USD-BRL,EUR-BRL,BTC-BRL,XAU-BRL,XAU-USD"
-    host = ".".join(["economia", "awesomeapi", "com", "br"])
-    url = "/".join([f"https://{host}", "json", "last", pares])
+    resultado = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # 1. Dólar (Série 1 - BCB) e Euro (Série 21619 - BCB)
+    for chave, serie_id in [("USDBRL", 1), ("EURBRL", 21619)]:
+        serie = buscar_serie_bcb(serie_id, dias_atras=15)
+        if len(serie) >= 2:
+            ult = float(serie[-1]["valor"])
+            ant = float(serie[-2]["valor"])
+            pct = ((ult - ant) / ant) * 100.0 if ant > 0 else 0.0
+            resultado[chave] = {"bid": ult, "pctChange": pct}
+        elif len(serie) == 1:
+            resultado[chave] = {"bid": float(serie[-1]["valor"]), "pctChange": 0.0}
+
+    # 2. Bitcoin (BTC/BRL) via API pública da Binance (sem chave)
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        url_btc = "/".join(["https://api.binance.com", "api", "v3", "ticker", "24hr"])
+        resp_btc = requests.get(
+            url_btc,
+            params={"symbol": "BTCBRL"},
+            headers=headers,
+            timeout=8,
+        )
+        if resp_btc.status_code == 200:
+            dados_btc = resp_btc.json()
+            ult_btc = float(dados_btc.get("lastPrice", 0.0))
+            pct_btc = float(dados_btc.get("priceChangePercent", 0.0))
+            if ult_btc > 0:
+                resultado["BTCBRL"] = {"bid": ult_btc, "pctChange": pct_btc}
     except Exception:
-        return {}
+        pass
+
+    # 3. Petróleo Brent Real (US$/barril) via Yahoo Finance Chart API (BZ=F)
+    try:
+        host_yf = ".".join(["query1", "finance", "yahoo", "com"])
+        url_brent = "/".join([f"https://{host_yf}", "v8", "finance", "chart", "BZ=F"])
+        resp_brent = requests.get(
+            url_brent,
+            params={"range": "5d", "interval": "1d"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=10,
+        )
+        if resp_brent.status_code == 200:
+            meta = resp_brent.json()["chart"]["result"][0]["meta"]
+            ult_brent = float(meta.get("regularMarketPrice", 0.0))
+            ant_brent = float(meta.get("chartPreviousClose", meta.get("previousClose", 0.0)))
+            if ult_brent > 0:
+                pct_brent = ((ult_brent - ant_brent) / ant_brent) * 100.0 if ant_brent > 0 else 0.0
+                resultado["BRENT"] = {"bid": ult_brent, "pctChange": pct_brent}
+    except Exception:
+        pass
+
+    return resultado
+
 
 
 st.set_page_config(layout="wide", page_title="Análise Técnica B3 (Brapi)")
@@ -1003,9 +1048,8 @@ with aba_mercado:
     btc_val, btc_pct = extrair_fx("BTCBRL")
     xau_usd, xau_pct = extrair_fx("XAUUSD")
 
-    # Busca proxy de Petróleo Brent / Óleo na B3 (OILB39) e Ouro na B3 (GOLD11)
+    brent_val, brent_pct = extrair_fx("BRENT")
     df_gold11, _ = carregar_dados_brapi("GOLD11", "3mo", "1d", token_brapi)
-    df_oil, _ = carregar_dados_brapi("OILB39", "3mo", "1d", token_brapi)
 
     def resumo_ativo_b3(df_temp: pd.DataFrame):
         if df_temp.empty or len(df_temp) < 2:
@@ -1015,19 +1059,14 @@ with aba_mercado:
         return ult_p, ((ult_p - ant_p) / ant_p) * 100.0
 
     gold11_val, gold11_pct = resumo_ativo_b3(df_gold11)
-    oil_val, oil_pct = resumo_ativo_b3(df_oil)
 
     c_fx1, c_fx2, c_fx3, c_fx4, c_fx5 = st.columns(5)
     c_fx1.metric("Dólar (USD/BRL)", f"R$ {usd_val:.2f}", delta=f"{usd_pct:+.2f}%", border=True)
     c_fx2.metric("Euro (EUR/BRL)", f"R$ {eur_val:.2f}", delta=f"{eur_pct:+.2f}%", border=True)
-    c_fx3.metric(
-        "Ouro Spot (Oz)",
-        f"US$ {xau_usd:,.2f}" if xau_usd > 0 else f"R$ {gold11_val:.2f}",
-        delta=f"{xau_pct:+.2f}%" if xau_usd > 0 else f"{gold11_pct:+.2f}%",
-        border=True,
-    )
-    c_fx4.metric("Petróleo Brent (OILB39)", f"R$ {oil_val:.2f}", delta=f"{oil_pct:+.2f}%", border=True)
+    c_fx3.metric("Ouro B3 (GOLD11)", f"R$ {gold11_val:.2f}", delta=f"{gold11_pct:+.2f}%", border=True)
+    c_fx4.metric("Petróleo Brent", f"US$ {brent_val:.2f}", delta=f"{brent_pct:+.2f}%", border=True)
     c_fx5.metric("Bitcoin (BTC/BRL)", f"R$ {btc_val:,.0f}".replace(",", "."), delta=f"{btc_pct:+.2f}%", border=True)
+
 
     st.divider()
 
@@ -1680,7 +1719,7 @@ with aba_opcoes:
 
     grafico_payoff = (faixa_sigma + curva + linha_zero + regras_verticais).properties(height=320).interactive()
 
-    st.altair_chart(grafico_payoff, use_container_width=True)
+    st.altair_chart(grafico_payoff, width="stretch")
 
 
     st.divider()
@@ -1775,7 +1814,7 @@ with aba_guia:
                 r"""
                 Painel macroeconômico e de benchmarks globais:
                 * **Juros & Inflação (Banco Central):** Exibe **Selic Meta**, **CDI Anualizado**, **IPCA acumulado em 12 meses** e o **Juro Real (CDI − IPCA)** via Equação de Fisher.
-                * **Câmbio & Commodities:** Acompanha **Dólar (USD/BRL)**, **Euro (EUR/BRL)**, **Ouro Spot**, **Petróleo Brent (`OILB39`)** e **Bitcoin (`BTC/BRL`)**.
+                * **Câmbio & Commodities:** Acompanha **Dólar (USD/BRL)**, **Euro (EUR/BRL)**, **Ouro Spot**, **Petróleo Brent (US$/barril)** e **Bitcoin (`BTC/BRL`)**.
                 * **Gráficos de Referência:** Exibe **Ibovespa (`BOVA11`)**, **S&P 500 (`IVVB11`)**, **Ouro B3 (`GOLD11`)** e a curva histórica da **Taxa DI / CDI (720 dias)**.
                 """
             )
