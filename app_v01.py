@@ -1831,6 +1831,7 @@ with aba_guia:
         | **Cruzamento EMA 17/72** | Médias Móveis Exponenciais de **17** e **72** períodos verificadas nos **últimos 3 pregões**. | **🟢 Cruzou p/ Cima:** EMA 17 superou a EMA 72 \| **🔴 Cruzou p/ Baixo:** EMA 17 perdeu a EMA 72. |
         | **Volume Relativo** | Comparação entre o volume financeiro do último pregão e a **Média Móvel Simples de 20 dias (MM20)**. | **🔥 Alerta de Volume:** Sinalizado quando o volume do dia é **≥ 150%** da média de 20 dias. |
         | **Juro Real (Fisher)** | `((1 + CDI) / (1 + IPCA_12M) - 1) × 100` com séries oficiais do Banco Central (SGS). | Mede o retorno real anualizado acima da inflação acumulada nos últimos 12 meses. |
+        | **Black-Scholes & ±1σ** | Modelo europeu com Selic vigente (BCB) e Volatilidade Histórica anualizada (252 du); faixa de `1σ = S × σ × √T`. | Estima prêmio justo da Put, Delta, IV do book e o intervalo esperado de 68,2% até o vencimento. |
         """
     )
 
