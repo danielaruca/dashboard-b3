@@ -13,6 +13,88 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
+
+# Motor matemático de Opções e Vencimentos B3
+import math
+import calendar
+import altair as alt # desenhar e sobrepor linhas verticais marcadas com rótulos no gráfico de Payoff
+
+LETRAS_PUT_B3 = {
+    1: "M", 2: "N", 3: "O", 4: "P", 5: "Q", 6: "R",
+    7: "S", 8: "T", 9: "U", 10: "V", 11: "W", 12: "X",
+}
+
+def proximos_vencimentos_b3(qtd: int = 4) -> list[dict]:
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    vencimentos = []
+    ano, mes = hoje.year, hoje.month
+
+    while len(vencimentos) < qtd:
+        cal = calendar.monthcalendar(ano, mes)
+        sextas = [semana[calendar.FRIDAY] for semana in cal if semana[calendar.FRIDAY] != 0]
+        terceira_sexta = datetime(ano, mes, sextas[2]).date()
+
+        if terceira_sexta > hoje:
+            dias_corridos = (terceira_sexta - hoje).days
+            dias_uteis_est = max(1, round(dias_corridos * (252 / 365)))
+            letra = LETRAS_PUT_B3[mes]
+            vencimentos.append({
+                "rotulo": f"Série {letra} • {terceira_sexta.strftime('%d/%m/%Y')} ({dias_corridos}d corridos / ~{dias_uteis_est} du)",
+                "data": terceira_sexta,
+                "letra": letra,
+                "dias_corridos": dias_corridos,
+                "dias_uteis": dias_uteis_est,
+            })
+
+        mes += 1
+        if mes > 12:
+            mes = 1
+            ano += 1
+
+    return vencimentos
+
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+def _norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+def black_scholes_put(S: float, K: float, T: float, r: float, sigma: float) -> dict:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        intrinseco = max(0.0, K - S)
+        return {"premio": intrinseco, "delta": -1.0 if S < K else 0.0, "theta_dia": 0.0, "pop": 100.0 if S >= K else 0.0}
+
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+
+    premio = K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+    delta = _norm_cdf(d1) - 1.0  # Negativo para Put (ex: -0.25)
+    theta_anual = (
+        -(S * _norm_pdf(d1) * sigma) / (2.0 * math.sqrt(T))
+        + r * K * math.exp(-r * T) * _norm_cdf(-d2)
+    )
+    theta_dia = theta_anual / 252.0
+    pop = _norm_cdf(d2) * 100.0  # Probabilidade estimada de expirar OTM (sem exercício)
+
+    return {"premio": max(0.01, premio), "delta": delta, "theta_dia": theta_dia, "pop": pop}
+
+def calcular_iv_put(premio_mercado: float, S: float, K: float, T: float, r: float) -> float:
+    if premio_mercado <= max(0.0, K - S) or T <= 0:
+        return 0.0
+    sigma = 0.35
+    for _ in range(50):
+        res = black_scholes_put(S, K, T, r, sigma)
+        diff = res["premio"] - premio_mercado
+        if abs(diff) < 1e-4:
+            break
+        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+        vega = S * _norm_pdf(d1) * math.sqrt(T)
+        if vega < 1e-6:
+            break
+        sigma = max(0.05, min(3.0, sigma - diff / vega))
+    return sigma * 100.0
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def buscar_noticias_rss(consulta: str, limite: int = 12) -> list[dict]:
     query_codificada = quote(consulta)
@@ -521,13 +603,14 @@ with st.sidebar:
             with col_vr:
                 st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
 
-aba_grafico, aba_scanner, aba_subplots, aba_mercado, aba_noticias, aba_alertas, aba_guia = st.tabs([
+aba_grafico, aba_scanner, aba_subplots, aba_mercado, aba_noticias, aba_alertas, aba_opcoes, aba_guia = st.tabs([
     "📈 Gráfico Individual",
     "🔍 Scanner de RSI (Carteira)",
     "🗂️ Visão Geral (Subplots 3M)",
     "🌐 Mercado",
     "📰 Notícias",
     "🔔 Alertas",
+    "🎯 Opções",
     "ℹ️ Guia e Critérios",
 ])
 
@@ -1329,6 +1412,299 @@ with aba_alertas:
 
 
 
+with aba_opcoes:
+    st.title("🎯 Bancada de Opções — Venda de Put (B3)")
+    st.caption(
+        "Grade de Strikes OTM, precificação Black-Scholes, taxas anualizadas e simulador de payoff para geração de renda com Venda de Put."
+    )
+
+    # Busca Selic vigente do Banco Central para taxa livre de risco (r)
+    selic_op_dados = buscar_serie_bcb(432, dias_atras=60)
+    taxa_selic_anual = (float(selic_op_dados[-1]["valor"]) / 100.0) if selic_op_dados else 0.1325
+
+    # --- SEÇÃO 1: CONTROLES DO ATIVO E VENCIMENTO ---
+    with st.container(border=True):
+        c_op1, c_op2, c_op3 = st.columns([1.2, 1.8, 1])
+
+        with c_op1:
+            idx_op = (
+                LISTA_CARTEIRA_B3.index(st.session_state["ativo_selecionado"])
+                if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
+                else 0
+            )
+            ativo_op = st.selectbox("Ativo-Objeto (B3):", LISTA_CARTEIRA_B3, index=idx_op, key="sel_ativo_opcoes")
+            st.session_state["ativo_selecionado"] = ativo_op
+
+        lista_vencs = proximos_vencimentos_b3(4)
+        with c_op2:
+            rotulos_venc = [v["rotulo"] for v in lista_vencs]
+            venc_escolhido_rot = st.selectbox("Vencimento (3ª Sexta-feira B3):", rotulos_venc, index=0)
+            venc_info = next(v for v in lista_vencs if v["rotulo"] == venc_escolhido_rot)
+
+        df_op, err_op = carregar_dados_brapi(ativo_op, "3mo", "1d", token_brapi)
+        if not df_op.empty and len(df_op) >= 15:
+            preco_spot = float(df_op.iloc[-1]["close"])
+            retornos_log = (df_op["close"] / df_op["close"].shift(1)).dropna().apply(math.log)
+            hv_anual = float(retornos_log.std() * math.sqrt(252)) * 100.0
+        else:
+            preco_spot = mapa_cotacoes.get(ativo_op, (30.0, 0.0))[0]
+            hv_anual = 32.0
+
+        with c_op3:
+            vol_usada = st.number_input(
+                "Volatilidade Implícita / HV (% a.a.):",
+                min_value=5.0,
+                max_value=200.0,
+                value=float(round(hv_anual, 1)),
+                step=1.0,
+                help="Preenchida automaticamente com a Volatilidade Histórica de 3 meses do ativo. Ajuste se a IV do book estiver maior.",
+            )
+
+    # Cards de Contexto do Ativo-Objeto
+    rsi_op_val = float(df_op.iloc[-1]["RSI"]) if (not df_op.empty and "RSI" in df_op.columns) else 50.0
+    o1, o2, o3, o4 = st.columns(4)
+    o1.metric(f"Cotação {ativo_op}", f"R$ {preco_spot:.2f}", border=True)
+    o2.metric("Volatilidade Histórica (3M)", f"{hv_anual:.1f}% a.a.", border=True)
+    o3.metric("IFR (14) Atual", f"{rsi_op_val:.1f} pts", border=True)
+    o4.metric("Taxa Selic (Livre de Risco)", f"{taxa_selic_anual * 100:.2f}% a.a.", border=True)
+
+    st.divider()
+
+    # --- SEÇÃO 2: GRADE DE STRIKES OTM PARA VENDA DE PUT ---
+    st.subheader(f"📋 Grade de Strikes OTM — Série {venc_info['letra']} ({venc_info['data'].strftime('%d/%m/%Y')})")
+
+    T_anos = venc_info["dias_uteis"] / 252.0
+    sigma_dec = vol_usada / 100.0
+    raiz_ticker = ativo_op[:4]
+
+    # Gera 7 strikes OTM / ATM (-10% até 0% em passos de 0.50 ou 0.25 conforme o preço)
+    passo_strike = 0.25 if preco_spot < 15 else (0.50 if preco_spot < 50 else 1.00)
+    strike_atm = round(preco_spot / passo_strike) * passo_strike
+
+    linhas_grade_put = []
+    for degrau in range(0, 7):
+        k_strike = round(strike_atm - (degrau * passo_strike), 2)
+        if k_strike <= 0:
+            continue
+
+        dist_pct = ((k_strike - preco_spot) / preco_spot) * 100.0
+        bs = black_scholes_put(preco_spot, k_strike, T_anos, taxa_selic_anual, sigma_dec)
+        premio_est = bs["premio"]
+        taxa_operacao = (premio_est / k_strike) * 100.0
+        taxa_anualizada = ((1.0 + premio_est / k_strike) ** (252.0 / venc_info["dias_uteis"]) - 1.0) * 100.0
+        breakeven = k_strike - premio_est
+        desconto_total = ((breakeven - preco_spot) / preco_spot) * 100.0
+        codigo_ref = f"{raiz_ticker}{venc_info['letra']}{int(round(k_strike * 100))}"
+
+        linhas_grade_put.append({
+            "Ticker Ref.": codigo_ref,
+            "Strike (R$)": k_strike,
+            "Dist. Spot (%)": dist_pct,
+            "Prêmio Teórico (R$)": premio_est,
+            "Taxa / Strike (%)": taxa_operacao,
+            "Taxa Anual. (% a.a.)": taxa_anualizada,
+            "Breakeven (R$)": breakeven,
+            "Desconto Total (%)": desconto_total,
+            "Delta (Δ)": bs["delta"],
+            "Prob. Não-Exercício": bs["pop"],
+        })
+
+    df_grade_put = pd.DataFrame(linhas_grade_put)
+    st.dataframe(
+        df_grade_put,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Strike (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Dist. Spot (%)": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Prêmio Teórico (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Taxa / Strike (%)": st.column_config.NumberColumn(format="%.2f%%"),
+            "Taxa Anual. (% a.a.)": st.column_config.NumberColumn(format="%.1f%%"),
+            "Breakeven (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Desconto Total (%)": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Delta (Δ)": st.column_config.NumberColumn(format="%.2f"),
+            "Prob. Não-Exercício": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
+        },
+    )
+
+    st.divider()
+
+    # --- SEÇÃO 3: SIMULADOR DE POSIÇÃO & PAYOFF NO VENCIMENTO ---
+    st.subheader("🧮 Simulador de Venda de Put & Payoff no Vencimento")
+
+    strikes_disp = [r["Strike (R$)"] for r in linhas_grade_put]
+    idx_k_padrao = min(2, len(strikes_disp) - 1) if strikes_disp else 0
+
+    sp1, sp2, sp3 = st.columns(3)
+    with sp1:
+        k_sim = st.selectbox("Strike da Put Vendida (R$):", strikes_disp, index=idx_k_padrao)
+    with sp2:
+        premio_sug_sim = next(
+            (r["Prêmio Teórico (R$)"] for r in linhas_grade_put if r["Strike (R$)"] == k_sim),
+            0.50,
+        )
+        premio_real = st.number_input(
+            "Prêmio Recebido no Book (R$ / ação):",
+            min_value=0.01,
+            value=float(round(premio_sug_sim, 2)),
+            step=0.01,
+        )
+    with sp3:
+        qtd_opcoes = st.number_input(
+            "Quantidade de Opções Vendidas:",
+            min_value=100,
+            max_value=100000,
+            value=1000,
+            step=100,
+        )
+
+    credito_total = premio_real * qtd_opcoes
+    caixa_garantia = k_sim * qtd_opcoes
+    yield_operacao = (premio_real / k_sim) * 100.0
+    yield_anual = ((1.0 + premio_real / k_sim) ** (252.0 / venc_info["dias_uteis"]) - 1.0) * 100.0
+    pm_exercicio = k_sim - premio_real
+    iv_implicita = calcular_iv_put(premio_real, preco_spot, k_sim, T_anos, taxa_selic_anual)
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric(
+        "Crédito Líquido Recebido",
+        f"R$ {credito_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+        delta=f"Taxa: {yield_operacao:.2f}% ({yield_anual:.1f}% a.a.)",
+        border=True,
+    )
+    r2.metric(
+        "Caixa / Garantia p/ Exercício",
+        f"R$ {caixa_garantia:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+        delta=f"{qtd_opcoes} ações @ R$ {k_sim:.2f}",
+        delta_color="off",
+        border=True,
+    )
+    r3.metric(
+        "Preço Médio se Exercido (Breakeven)",
+        f"R$ {pm_exercicio:.2f}",
+        delta=f"{((pm_exercicio - preco_spot) / preco_spot) * 100:+.2f}% abaixo do spot",
+        border=True,
+    )
+    r4.metric(
+        "Volatilidade Implícita (IV Book)",
+        f"{iv_implicita:.1f}% a.a.",
+        delta=f"HV 3M: {hv_anual:.1f}% a.a.",
+        delta_color="off",
+        border=True,
+    )
+
+    # Gráfico de Payoff no Vencimento com Linhas Verticais (Breakeven, Spot e ±1 Desvio Padrão)
+    vol_para_sigma = (iv_implicita / 100.0) if iv_implicita > 0 else sigma_dec
+    desvio_1_reais = preco_spot * vol_para_sigma * math.sqrt(T_anos)
+    sigma_inf = round(max(0.01, preco_spot - desvio_1_reais), 2)
+    sigma_sup = round(preco_spot + desvio_1_reais, 2)
+
+
+    # Centraliza o eixo X em torno do ponto médio entre Strike e Spot
+    centro_x = (k_sim + preco_spot) / 2.0
+    alcance_x = max(abs(sigma_sup - centro_x), abs(centro_x - sigma_inf), abs(preco_spot - k_sim) * 1.4, preco_spot * 0.08) * 1.15
+    faixa_min = round(max(0.01, centro_x - alcance_x), 2)
+    faixa_max = round(centro_x + alcance_x, 2)
+    passo_eixo = max(0.05, round((faixa_max - faixa_min) / 80, 2))
+
+    pontos_payoff = []
+    p_iter = faixa_min
+    while p_iter <= faixa_max:
+        lucro_acao = premio_real if p_iter >= k_sim else (premio_real - (k_sim - p_iter))
+        pontos_payoff.append({
+            "preco": round(p_iter, 2),
+            "resultado": round(lucro_acao * qtd_opcoes, 2),
+        })
+        p_iter += passo_eixo
+
+    df_payoff_alt = pd.DataFrame(pontos_payoff)
+
+    # Tabela de referências verticais (Desvio Padrão com linha mais fina)
+    df_refs = pd.DataFrame([
+        {"preco": sigma_inf, "rotulo": f"-1σ (R$ {sigma_inf:.2f})", "cor": "#FFF243", "largura": 1.0},
+        {"preco": round(pm_exercicio, 2), "rotulo": f"Breakeven (R$ {pm_exercicio:.2f})", "cor": "#FC0000", "largura": 3.0},
+        {"preco": round(k_sim, 2), "rotulo": f"Strike (R$ {k_sim:.2f})", "cor": "#FFFFFF", "largura": 1.0},
+        {"preco": round(preco_spot, 2), "rotulo": f"Spot (R$ {preco_spot:.2f})", "cor": "#29B6F6", "largura": 3.0},
+        {"preco": sigma_sup, "rotulo": f"+1σ (R$ {sigma_sup:.2f})", "cor": "#FFF243", "largura": 1.0},
+    ])
+
+    # Centraliza o eixo Y em torno da linha zero (equilibrando lucro máximo e prejuízo exibido)
+    max_lucro = float(df_payoff_alt["resultado"].max()) if not df_payoff_alt.empty else 100.0
+    min_prej = float(df_payoff_alt["resultado"].min()) if not df_payoff_alt.empty else -100.0
+    amplitude_y = max(abs(max_lucro) * 2.2, abs(min_prej) * 1.15, 100.0)
+    y_topo_label = amplitude_y * 0.55
+    y_min_chart = -amplitude_y * 0.75
+
+
+    escala_x_travada = alt.Scale(domain=[faixa_min, faixa_max], zero=False, nice=False)
+    escala_y_travada = alt.Scale(domain=[y_min_chart, y_topo_label], zero=False, nice=False)
+
+    # 0. Faixa Sombreada Transparente entre -1σ e +1σ (68,2% de probabilidade)
+    faixa_sigma = alt.Chart(pd.DataFrame([{"x1": sigma_inf, "x2": sigma_sup}])).mark_rect(
+        color="#FFF243",
+        opacity=0.08,
+        clip=True,
+    ).encode(
+        x=alt.X("x1:Q", scale=escala_x_travada),
+        x2="x2:Q",
+    )
+
+    # 1. Curva de Payoff
+    curva = alt.Chart(df_payoff_alt).mark_line(color="#26A69A", strokeWidth=3, clip=True).encode(
+        x=alt.X("preco:Q", title="Preço no Vencimento (R$)", scale=escala_x_travada),
+        y=alt.Y("resultado:Q", title="Resultado Líquido (R$)", scale=escala_y_travada),
+        tooltip=[
+            alt.Tooltip("preco:Q", title="Preço Venc. (R$)", format=".2f"),
+            alt.Tooltip("resultado:Q", title="Resultado (R$)", format=",.2f"),
+        ],
+    )
+
+    # 2. Linha Horizontal Zero (Lucro / Prejuízo)
+    linha_zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+        color="#6C7386", strokeDash=[3, 3], strokeWidth=1
+    ).encode(y=alt.Y("y:Q", scale=escala_y_travada))
+
+    # 3. Linhas Verticais de Referência
+    regras_verticais = alt.Chart(df_refs).mark_rule(strokeDash=[5, 4], clip=True).encode(
+        x=alt.X("preco:Q", scale=escala_x_travada),
+        strokeWidth=alt.StrokeWidth("largura:Q", scale=None, legend=None),
+        color=alt.Color("rotulo:N", scale=alt.Scale(
+            domain=df_refs["rotulo"].tolist(),
+            range=df_refs["cor"].tolist(),
+        ), legend=alt.Legend(title="Referências no Vencimento", orient="top")),
+        tooltip=[
+            alt.Tooltip("rotulo:N", title="Referência"),
+            alt.Tooltip("preco:Q", title="Preço (R$)", format=".2f"),
+        ],
+    )
+
+    grafico_payoff = (faixa_sigma + curva + linha_zero + regras_verticais).properties(height=320).interactive()
+
+    st.altair_chart(grafico_payoff, use_container_width=True)
+
+
+    st.divider()
+
+    # --- SEÇÃO 4: RADAR DE CANDIDATAS A VENDA DE PUT NA CARTEIRA ---
+    st.subheader("🔍 Radar de Candidatas à Venda de Put (Carteira B3)")
+    st.caption("Ativos ordenados pelo menor IFR (14) — papéis descontados onde os prêmios de Put costumam oferecer melhor relação risco/retorno.")
+
+    if "df_scanner" in st.session_state and not st.session_state["df_scanner"].empty:
+        df_cand = st.session_state["df_scanner"][["Ativo", "Fechamento (R$)", "Variação (%)", "RSI (14)", "Condição", "EMA 9/21 (3D)"]].copy()
+        df_cand = df_cand.sort_values("RSI (14)", ascending=True).head(10).reset_index(drop=True)
+        st.dataframe(
+            df_cand,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Fechamento (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Variação (%)": st.column_config.NumberColumn(format="%+.2f%%"),
+                "RSI (14)": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=100),
+            },
+        )
+
+
+
 with aba_guia:
     st.title("ℹ️ Guia de Uso e Critérios Técnicos")
     st.markdown(
@@ -1428,6 +1804,16 @@ with aba_guia:
                 """
             )
 
+    with st.container(border=True):
+        st.subheader("🎯 Aba 7: Opções (Venda de Put)")
+        st.markdown(
+            r"""
+            Bancada completa para estruturação e simulação de **Venda Coberta de Put (Cash-Secured Put)**:
+            * **Grade de Strikes OTM & Black-Scholes:** Gera automaticamente os códigos de referência das séries mensais da B3 (`M` a `X`, vencimento na 3ª sexta-feira) com **Prêmio Teórico**, **Taxa Anualizada (% a.a.)**, **Delta (Δ)** e **Probabilidade de Não-Exercício**.
+            * **Simulador & Gráfico de Payoff:** Calcula o **Crédito Líquido**, **Caixa/Garantia necessária**, **Breakeven real** e a **Volatilidade Implícita (IV Book)**, exibindo a curva de resultado no vencimento com marcadores de **Breakeven**, **Spot** e canal sombreado de **±1 Desvio Padrão (`±1σ`)**.
+            * **Radar de Candidatas:** Lista os ativos mais descontados da carteira (menor IFR) para facilitar a escolha de oportunidades.
+            """
+        )
  
     st.divider()
 
