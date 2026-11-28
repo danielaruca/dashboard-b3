@@ -1275,31 +1275,25 @@ with aba_noticias:
     st.title("📰 Radar de Notícias da Carteira")
     st.caption("Manchetes recentes filtradas por ativo ou panorama geral da B3 (cache de 15 minutos).")
 
-    col_n1, col_n2 = st.columns([1.4, 2])
-    with col_n1:
-        modo_noticia = st.radio(
-            "Escopo das notícias:",
-            ["Ativo Selecionado", "Panorama Carteira / Ibovespa"],
-            horizontal=True,
-        )
-    with col_n2:
-        opcoes_n = LISTA_CARTEIRA_B3 + ["Outro (digitar)..."]
-        idx_n = (
-            LISTA_CARTEIRA_B3.index(st.session_state["ativo_selecionado"])
-            if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
-            else 0
-        )
-        if modo_noticia == "Ativo Selecionado":
-            ticker_noticia = st.selectbox(
-                "Filtrar manchetes do ativo:",
-                LISTA_CARTEIRA_B3,
-                index=idx_n,
-            )
-            termo_busca = f"{ticker_noticia} ações OR B3 when:7d"
+    ativo_not = st.session_state["ativo_selecionado"]
 
-        else:
-            ticker_noticia = "Ibovespa / Carteira B3"
-            termo_busca = "Ibovespa OR B3 OR dólar when:1d"
+    modo_noticia = st.radio(
+        "Escopo das notícias:",
+        ["Panorama Ibovespa", "Ativo Selecionado"],
+        index=0,
+        horizontal=True,
+        key="modo_noticia_radio",
+    )
+
+    if modo_noticia == "Ativo Selecionado":
+        ticker_noticia = ativo_not
+        st.caption(f"🔎 Exibindo manchetes recentes de :orange[**{ticker_noticia}**] (últimos 7 dias)")
+        termo_busca = f"{ticker_noticia} ações OR B3 when:7d"
+    else:
+        ticker_noticia = "Ibovespa / Carteira B3"
+        termo_busca = "Ibovespa OR B3 OR dólar when:1d"
+
+
 
     lista_noticias = buscar_noticias_rss(termo_busca, limite=12)
 
@@ -2224,7 +2218,7 @@ with aba_guia:
                 r"""
                 Feed integrado de manchetes financeiras via **Google News RSS** (com cache de **15 minutos**):
                 * **Ativo Selecionado:** Exibe as notícias mais recentes dos **últimos 7 dias** referentes ao papel escolhido (já sincronizado com a Watchlist).
-                * **Panorama Carteira / Ibovespa:** Traz as manchetes das **últimas 24 horas** sobre o Ibovespa, B3 e câmbio, ordenadas da mais recente para a mais antiga.
+                * **Panorama Ibovespa:** Traz as manchetes das **últimas 24 horas** sobre o Ibovespa, B3 e câmbio, ordenadas da mais recente para a mais antiga.
                 """
             )
 
