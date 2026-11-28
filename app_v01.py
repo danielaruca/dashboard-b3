@@ -364,16 +364,21 @@ def carregar_dados_brapi(ticker: str, periodo: str, intervalo: str, token: str =
     df["RSI"] = 100 - (100 / (1 + (ganho / perda)))
     return df, ""
 
-LISTA_CARTEIRA_B3 = [
+LISTA_CARTEIRA_PADRAO = [
     "BOVA11", "B3SA3", "BBAS3", "BBDC4", "BEEF3", "BPAC11", "BRAV3",
     "CMIN3", "CSNA3", "CYRE3", "DIRR3", "EGIE3", "EQTL3", "GGBR4",
     "HYPE3", "ITUB4", "KLBN11", "MBRF3", "MRVE3", "PETR4", "PRIO3",
     "RADL3", "RENT3", "SMAL11", "USIM5", "VALE3", "VAMO3", "VBBR3", "WEGE3",
 ]
 
-# Inicializa o ativo selecionado na sessão para permitir clique na Watchlist da Sidebar
+if "carteira_b3" not in st.session_state:
+    st.session_state["carteira_b3"] = list(LISTA_CARTEIRA_PADRAO)
+
+LISTA_CARTEIRA_B3 = st.session_state["carteira_b3"]
+
 if "ativo_selecionado" not in st.session_state:
     st.session_state["ativo_selecionado"] = "BOVA11"
+
 
 token_brapi = MEU_TOKEN_BRAPI
 
@@ -486,10 +491,6 @@ def executar_varredura_unificada():
 
         time.sleep(0.15)
 
-    barra.empty()
-    st.session_state["df_scanner"] = pd.DataFrame(resultados_scan)
-    st.session_state["dados_grade_3m"] = dados_grade
-    st.session_state["erros_scanner"] = erros_scan
 
     barra.empty()
     st.session_state["df_scanner"] = pd.DataFrame(resultados_scan)
@@ -515,6 +516,12 @@ if "cfg_alertas" not in st.session_state:
 
 if "alertas_preco" not in st.session_state:
     st.session_state["alertas_preco"] = []
+
+if "puts_vendidas" not in st.session_state:
+    st.session_state["puts_vendidas"] = []
+
+
+#########################################################################################################
 
 
 with st.sidebar:
@@ -655,41 +662,65 @@ with st.sidebar:
             with col_vr:
                 st.markdown('<div style="text-align: right; color: #6C7386; font-size: 0.8rem; padding-top: 6px;">--</div>', unsafe_allow_html=True)
 
+
+    st.divider()
+    with st.expander("⚙️ Gerenciar Watchlist B3", expanded=False):
+        novo_tk = st.text_input(
+            "Adicionar ticker B3:",
+            placeholder="Ex: BBSE3, CXSE3, TAEE11",
+            key="input_novo_tk_wl",
+        ).strip().upper().replace(".SA", "")
+
+        c_add, c_rst = st.columns(2)
+        with c_add:
+            if st.button("➕ Adicionar", key="btn_add_tk_wl", width="stretch"):
+                if novo_tk and novo_tk not in st.session_state["carteira_b3"]:
+                    st.session_state["carteira_b3"].append(novo_tk)
+                    st.session_state["carteira_b3"].sort()
+                    st.session_state["ativo_selecionado"] = novo_tk
+                    executar_varredura_unificada()
+                    st.rerun()
+        with c_rst:
+            if st.button("↩️ Padrão", key="btn_rst_tk_wl", width="stretch"):
+                st.session_state["carteira_b3"] = list(LISTA_CARTEIRA_PADRAO)
+                executar_varredura_unificada()
+                st.rerun()
+
+        if len(st.session_state["carteira_b3"]) > 1:
+            tk_remover = st.selectbox(
+                "Remover ativo:",
+                st.session_state["carteira_b3"],
+                key="sel_rem_tk_wl",
+            )
+            if st.button("🗑️ Remover Selecionado", key="btn_rem_tk_wl", width="stretch"):
+                st.session_state["carteira_b3"].remove(tk_remover)
+                if st.session_state["ativo_selecionado"] == tk_remover:
+                    st.session_state["ativo_selecionado"] = list(st.session_state["carteira_b3"]).pop(0)
+                executar_varredura_unificada()
+                st.rerun()
+
+
 aba_grafico, aba_scanner, aba_subplots, aba_mercado, aba_noticias, aba_alertas, aba_opcoes, aba_guia = st.tabs([
-    "📈 Gráfico Individual",
-    "🔍 Scanner de RSI (Carteira)",
-    "🗂️ Visão Geral (Subplots 3M)",
-    "🌐 Mercado",
-    "📰 Notícias",
-    "🔔 Alertas",
-    "🎯 Opções",
-    "ℹ️ Guia e Critérios",
+    "📈 GRÁFICO",
+    "🔍 SCANNER",
+    "🗂️ MULTI-GRÁFICOS",
+    "🌐 MERCADO",
+    "📰 NOTÍCIAS",
+    "🔔 ALERTAS",
+    "🎯 OPÇÕES",
+    "ℹ️ CRITÉRIOS",
 ])
 
 
+#########################################################################################################
+
 
 with aba_grafico:
-    # Controles do Gráfico Individual (movidos da Sidebar para a Aba 1)
+    ativo = st.session_state["ativo_selecionado"]
+
+    # Controles do Gráfico Individual (sincronizado com a Watchlist B3)
     with st.container(border=True):
-        c_at, c_tf, c_per = st.columns([1.5, 1.2, 1])
-
-        with c_at:
-            ativos_b3 = LISTA_CARTEIRA_B3 + ["Outro (digitar)..."]
-            idx_padrao = (
-                LISTA_CARTEIRA_B3.index(st.session_state["ativo_selecionado"])
-                if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
-                else len(LISTA_CARTEIRA_B3)
-            )
-            escolha = st.selectbox("Ativo da B3", ativos_b3, index=idx_padrao)
-
-            if escolha == "Outro (digitar)...":
-                ativo = st.text_input(
-                    "Código do Ativo (ex: RENT3, BPAC11)",
-                    value=st.session_state["ativo_selecionado"] if st.session_state["ativo_selecionado"] not in LISTA_CARTEIRA_B3 else "MGLU3",
-                ).strip().upper().replace(".SA", "")
-            else:
-                ativo = escolha
-                st.session_state["ativo_selecionado"] = ativo
+        c_tf, c_per = st.columns(2)
 
         with c_tf:
             mapa_timeframe = {"Diário (1D)": "1d", "Semanal (1S)": "1wk"}
@@ -697,12 +728,11 @@ with aba_grafico:
             intervalo = mapa_timeframe[tf_label]
 
         with c_per:
-            opcoes_periodo = ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]
-            periodo = st.selectbox("Período Histórico", opcoes_periodo, index=1)
-
-    st.title(f"{ativo} - {tf_label}")
+            opcoes_periodo = ["3mo", "1y", "2y", "5y"]
+            periodo = st.radio("Período Histórico", opcoes_periodo, index=0, horizontal=True)
 
     df, erro_api = carregar_dados_brapi(ativo, periodo, intervalo, token_brapi)
+    st.title(f"{ativo} - {tf_label} ({len(df)} pregões)")
 
     if df.empty:
         st.error(
@@ -755,30 +785,58 @@ with aba_grafico:
         horizontal=True,
     )
 
-    candles = [{"time": r["time"], "open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]), "close": float(r["close"])} for _, r in df.iterrows()]
+    # Agrega OHLC real (open=first, high=max, low=min, close=last) para enquadrar 2y e 5y sem distorcer máximas/mínimas
+    passo_visual = 1
+    if intervalo == "1d" and len(df) > 300:
+        passo_visual = max(2, round(len(df) / 250))
 
-    # Montagem dinâmica das séries do painel principal
+    if passo_visual > 1:
+        grupos = df.index // passo_visual
+        df_plot = (
+            df.groupby(grupos, as_index=False)
+            .agg({
+                "time": "last",
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "EMA_17": "last",
+                "EMA_72": "last",
+                "EMA_9": "last",
+                "EMA_21": "last",
+                "RSI": "last",
+            })
+        )
+    else:
+        df_plot = df.copy()
+
+
+    candles = [
+        {"time": r["time"], "open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]), "close": float(r["close"])}
+        for _, r in df_plot.iterrows()
+    ]
+
     series_principal = [
         {"type": "Candlestick", "data": candles, "options": {"upColor": "#26A69A", "downColor": "#EF5350", "borderVisible": False, "wickUpColor": "#26A69A", "wickDownColor": "#EF5350"}},
     ]
 
     if par_medias in ["EMA 17 / 72", "Ambas (9, 17, 21 e 72)"]:
-        ema_17_data = [{"time": r["time"], "value": float(r["EMA_17"])} for _, r in df.dropna(subset=["EMA_17"]).iterrows()]
-        ema_72_data = [{"time": r["time"], "value": float(r["EMA_72"])} for _, r in df.dropna(subset=["EMA_72"]).iterrows()]
+        ema_17_data = [{"time": r["time"], "value": float(r["EMA_17"])} for _, r in df_plot.dropna(subset=["EMA_17"]).iterrows()]
+        ema_72_data = [{"time": r["time"], "value": float(r["EMA_72"])} for _, r in df_plot.dropna(subset=["EMA_72"]).iterrows()]
         series_principal.extend([
             {"type": "Line", "data": ema_17_data, "options": {"color": "#29B6F6", "lineWidth": 1, "title": "EMA 17"}},
             {"type": "Line", "data": ema_72_data, "options": {"color": "#FF6D00", "lineWidth": 1, "title": "EMA 72"}},
         ])
 
     if par_medias in ["EMA 9 / 21", "Ambas (9, 17, 21 e 72)"]:
-        ema_9_data = [{"time": r["time"], "value": float(r["EMA_9"])} for _, r in df.dropna(subset=["EMA_9"]).iterrows()]
-        ema_21_data = [{"time": r["time"], "value": float(r["EMA_21"])} for _, r in df.dropna(subset=["EMA_21"]).iterrows()]
+        ema_9_data = [{"time": r["time"], "value": float(r["EMA_9"])} for _, r in df_plot.dropna(subset=["EMA_9"]).iterrows()]
+        ema_21_data = [{"time": r["time"], "value": float(r["EMA_21"])} for _, r in df_plot.dropna(subset=["EMA_21"]).iterrows()]
         series_principal.extend([
             {"type": "Line", "data": ema_9_data, "options": {"color": "#00E676", "lineWidth": 1, "title": "EMA 9"}},
             {"type": "Line", "data": ema_21_data, "options": {"color": "#FFD54F", "lineWidth": 1, "title": "EMA 21"}},
         ])
 
-    df_rsi = df.dropna(subset=["RSI"])
+    df_rsi = df_plot.dropna(subset=["RSI"])
     rsi_data = [{"time": r["time"], "value": float(r["RSI"])} for _, r in df_rsi.iterrows()]
     linha_70 = [{"time": r["time"], "value": 70.0} for _, r in df_rsi.iterrows()]
     linha_30 = [{"time": r["time"], "value": 30.0} for _, r in df_rsi.iterrows()]
@@ -787,6 +845,9 @@ with aba_grafico:
         "layout": {"background": {"color": "#131722"}, "textColor": "#D1D4DC"},
         "grid": {"vertLines": {"color": "rgba(42, 46, 57, 0.5)"}, "horzLines": {"color": "rgba(42, 46, 57, 0.5)"}},
     }
+
+
+
 
     lightweight_charts_v5_component(
         name=f"brapi_{ativo}_{intervalo}_{periodo}_{par_medias}",
@@ -809,6 +870,8 @@ with aba_grafico:
         height=660,
     )
 
+
+#########################################################################################################
 
 
 with aba_scanner:
@@ -866,6 +929,14 @@ with aba_scanner:
                 },
             )
 
+            csv_scanner = df_res.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
+            st.download_button(
+                label="📥 Baixar Scanner em CSV (Excel)",
+                data=csv_scanner,
+                file_name=f"scanner_b3_{datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+            )
+
         if st.session_state.get("erros_scanner"):
             with st.expander(f"Ver ativos com aviso ({len(st.session_state['erros_scanner'])})"):
                 for msg_e in st.session_state["erros_scanner"]:
@@ -876,6 +947,8 @@ with aba_scanner:
         if erros_iniciais:
             st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
 
+
+#########################################################################################################
 
 
 with aba_subplots:
@@ -989,6 +1062,8 @@ with aba_subplots:
         if erros_iniciais:
             st.error(f"**Motivo informado pela API:** {erros_iniciais[0]}")
 
+
+#########################################################################################################
 
 
 with aba_mercado:
@@ -1193,6 +1268,8 @@ with aba_mercado:
                         st.warning("Histórico da taxa DI indisponível no Banco Central.")
 
 
+#########################################################################################################
+
 
 with aba_noticias:
     st.title("📰 Radar de Notícias da Carteira")
@@ -1250,6 +1327,9 @@ with aba_noticias:
                 """,
                 unsafe_allow_html=True,
             )
+
+
+#########################################################################################################
 
 
 with aba_alertas:
@@ -1457,6 +1537,8 @@ with aba_alertas:
         st.info("Nenhum dado carregado no momento. Clique em **🔄 Atualizar Cotações** na barra lateral.")
 
 
+#########################################################################################################
+
 
 with aba_opcoes:
     st.title("🎯 Bancada de Opções — Venda de Put (B3)")
@@ -1478,8 +1560,16 @@ with aba_opcoes:
                 if st.session_state["ativo_selecionado"] in LISTA_CARTEIRA_B3
                 else 0
             )
-            ativo_op = st.selectbox("Ativo-Objeto (B3):", LISTA_CARTEIRA_B3, index=idx_op, key="sel_ativo_opcoes")
-            st.session_state["ativo_selecionado"] = ativo_op
+            ativo_op = st.selectbox(
+                "Ativo-Objeto (B3):",
+                LISTA_CARTEIRA_B3,
+                index=idx_op,
+                key=f"sel_ativo_opcoes_{st.session_state['ativo_selecionado']}",
+            )
+            if ativo_op != st.session_state["ativo_selecionado"]:
+                st.session_state["ativo_selecionado"] = ativo_op
+                st.rerun()
+
 
         lista_vencs = proximos_vencimentos_b3(4)
         with c_op2:
@@ -1571,6 +1661,14 @@ with aba_opcoes:
             "Delta (Δ)": st.column_config.NumberColumn(format="%.2f"),
             "Prob. Não-Exercício": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
         },
+    )
+
+    csv_grade_put = df_grade_put.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
+    st.download_button(
+        label=f"📥 Baixar Grade de Strikes ({ativo_op} • Série {venc_info['letra']}) em CSV",
+        data=csv_grade_put,
+        file_name=f"opcoes_put_{ativo_op}_serie_{venc_info['letra']}.csv",
+        mime="text/csv",
     )
 
     st.divider()
@@ -1731,6 +1829,293 @@ with aba_opcoes:
 
     st.divider()
 
+    # --- SEÇÃO 3.5: SIMULADOR DE ROLAGEM DE PUT ---
+    st.subheader("🔄 Simulador de Rolagem de Put")
+    st.caption(
+        "Avalie o resultado financeiro líquido, o novo Breakeven e a taxa anualizada ao recomprar a Put atual e abrir uma nova Put no vencimento seguinte."
+    )
+
+    with st.container(border=True):
+        rl1, rl2, rl3 = st.columns(3)
+        with rl1:
+            strike_atual_rl = st.number_input(
+                "Strike Put Atual (R$):",
+                min_value=0.01,
+                value=float(k_sim),
+                step=0.25,
+                key=f"rl_k_atual_{ativo_op}_{k_sim}",
+            )
+            custo_recompra_rl = st.number_input(
+                "Custo de Recompra Atual (R$ / ação):",
+                min_value=0.01,
+                value=float(round(max(premio_real * 1.6, max(0.05, strike_atual_rl - preco_spot + 0.15)), 2)),
+                step=0.01,
+                key=f"rl_custo_recompra_{ativo_op}_{k_sim}",
+            )
+
+        with rl2:
+            # Sugere o próximo vencimento da lista como padrão
+            idx_venc_prox = 1 if len(lista_vencs) > 1 else 0
+            venc_novo_rot = st.selectbox(
+                "Novo Vencimento (Destino):",
+                rotulos_venc,
+                index=idx_venc_prox,
+                key=f"rl_venc_novo_{ativo_op}",
+            )
+            venc_novo_info = next(v for v in lista_vencs if v["rotulo"] == venc_novo_rot)
+
+            strike_novo_rl = st.number_input(
+                "Novo Strike Vendido (R$):",
+                min_value=0.01,
+                value=float(round(max(0.25, strike_atual_rl - passo_strike), 2)),
+                step=0.25,
+                key=f"rl_k_novo_{ativo_op}_{k_sim}",
+            )
+
+        with rl3:
+            # Estima prêmio teórico da nova Put via Black-Scholes para sugerir no campo
+            T_novo_rl = venc_novo_info["dias_uteis"] / 252.0
+            bs_novo_rl = black_scholes_put(preco_spot, strike_novo_rl, T_novo_rl, taxa_selic_anual, sigma_dec)
+            premio_novo_rl = st.number_input(
+                "Prêmio Nova Put (R$ / ação):",
+                min_value=0.01,
+                value=float(round(bs_novo_rl["premio"], 2)),
+                step=0.01,
+                key=f"rl_premio_novo_{ativo_op}_{k_sim}_{strike_novo_rl}",
+            )
+            qtd_rl = st.number_input(
+                "Quantidade de Contratos:",
+                min_value=100,
+                max_value=100000,
+                value=int(qtd_opcoes),
+                step=100,
+                key=f"rl_qtd_{ativo_op}",
+            )
+
+
+        # Cálculos da Rolagem
+        fluxo_acao = premio_novo_rl - custo_recompra_rl
+        fluxo_total = fluxo_acao * qtd_rl
+        # Breakeven acumulado considerando o prêmio inicial da 1ª operação (premio_real) + saldo da rolagem
+        novo_breakeven = strike_novo_rl - (premio_real + fluxo_acao)
+        diff_strike = strike_novo_rl - strike_atual_rl
+        dias_adicionais = max(1, venc_novo_info["dias_uteis"] - venc_info["dias_uteis"])
+        taxa_rolagem_periodo = (fluxo_acao / strike_novo_rl) * 100.0
+        taxa_rolagem_anual = (
+            ((1.0 + fluxo_acao / strike_novo_rl) ** (252.0 / dias_adicionais) - 1.0) * 100.0
+            if fluxo_acao > -strike_novo_rl
+            else -100.0
+        )
+
+        m_rl1, m_rl2, m_rl3, m_rl4 = st.columns(4)
+        rotulo_fluxo = "Crédito Líquido na Rolagem" if fluxo_total >= 0 else "Débito Líquido na Rolagem"
+        m_rl1.metric(
+            rotulo_fluxo,
+            f"R$ {fluxo_total:+,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            delta=f"R$ {fluxo_acao:+.2f} / ação",
+            border=True,
+        )
+        m_rl2.metric(
+            "Novo Strike vs Atual",
+            f"R$ {strike_novo_rl:.2f}",
+            delta=f"{diff_strike:+.2f} R$ ({((diff_strike / strike_atual_rl) * 100):+.1f}%)",
+            delta_color="inverse",
+            border=True,
+        )
+        m_rl3.metric(
+            "Novo Breakeven Acumulado",
+            f"R$ {novo_breakeven:.2f}",
+            delta=f"{((novo_breakeven - preco_spot) / preco_spot) * 100:+.2f}% abaixo do spot",
+            border=True,
+        )
+        m_rl4.metric(
+            f"Retorno sobre Prazo Extra ({dias_adicionais} du)",
+            f"{taxa_rolagem_periodo:+.2f}%",
+            delta=f"{taxa_rolagem_anual:+.1f}% a.a. sobre novo strike",
+            border=True,
+        )
+
+
+    st.divider()
+
+    # --- SEÇÃO 3.8: GESTÃO DE CARTEIRA DE PUTS VENDIDAS (DIÁRIO DE OPERAÇÕES) ---
+    st.subheader("📒 Carteira de Puts Vendidas em Andamento")
+    st.caption(
+        "Registre suas vendas de Put abertas para acompanhar distância até o exercício, marcação a mercado (MtM) e garantia comprometida."
+    )
+
+    with st.expander("➕ Registrar Nova Venda de Put", expanded=False):
+        dp1, dp2, dp3, dp4, dp5 = st.columns([1.1, 1.3, 1.0, 1.0, 1.0])
+        with dp1:
+            op_ativo = st.selectbox(
+                "Ativo:",
+                LISTA_CARTEIRA_B3,
+                index=LISTA_CARTEIRA_B3.index(ativo_op) if ativo_op in LISTA_CARTEIRA_B3 else 0,
+                key=f"dp_at_{ativo_op}",
+            )
+        with dp2:
+            op_venc = st.date_input(
+                "Data Vencimento:",
+                value=venc_info["data"],
+                format="DD/MM/YYYY",
+                key=f"dp_vc_{ativo_op}_{venc_info['data']}",
+            )
+        with dp3:
+            op_strike = st.number_input(
+                "Strike (R$):",
+                min_value=0.01,
+                value=float(k_sim),
+                step=0.25,
+                key=f"dp_st_{ativo_op}_{k_sim}",
+            )
+        with dp4:
+            op_premio = st.number_input(
+                "Prêmio Rec. (R$):",
+                min_value=0.01,
+                value=float(premio_real),
+                step=0.01,
+                key=f"dp_pr_{ativo_op}_{k_sim}_{premio_real}",
+            )
+        with dp5:
+            op_qtd = st.number_input(
+                "Quantidade:",
+                min_value=100,
+                max_value=100000,
+                value=int(qtd_opcoes),
+                step=100,
+                key=f"dp_qt_{ativo_op}_{qtd_opcoes}",
+            )
+
+
+        if st.button("💾 Adicionar Operação à Carteira", width="stretch", key="btn_add_put_carteira"):
+            letra_mes = LETRAS_PUT_B3.get(op_venc.month, "X")
+            cod_opcao = f"{op_ativo[:4]}{letra_mes}{int(round(op_strike * 100))}"
+            st.session_state["puts_vendidas"].append({
+                "Codigo": cod_opcao,
+                "Ativo": op_ativo,
+                "Vencimento": op_venc.strftime("%Y-%m-%d"),
+                "Strike": float(op_strike),
+                "Premio_Rec": float(op_premio),
+                "Qtd": int(op_qtd),
+            })
+            st.rerun()
+
+    if st.session_state["puts_vendidas"]:
+        hoje_sp = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        linhas_carteira_puts = []
+        total_credito_cart = 0.0
+        total_garantia_cart = 0.0
+        total_mtm_cart = 0.0
+
+        for idx_p, pos in enumerate(st.session_state["puts_vendidas"]):
+            tk_p = pos["Ativo"]
+            k_p = float(pos["Strike"])
+            prem_rec_p = float(pos["Premio_Rec"])
+            qtd_p = int(pos["Qtd"])
+            dt_venc_p = datetime.strptime(pos["Vencimento"], "%Y-%m-%d").date()
+            dias_rest = (dt_venc_p - hoje_sp).days
+            du_rest = max(1, round(max(0, dias_rest) * (252 / 365)))
+
+            spot_p = mapa_cotacoes.get(tk_p, (preco_spot if tk_p == ativo_op else k_p, 0.0))[0]
+            dist_exerc = ((spot_p - k_p) / k_p) * 100.0
+
+            # Estima prêmio atual da Put via Black-Scholes para cálculo de MtM
+            if dias_rest <= 0:
+                prem_atual_est = max(0.0, k_p - spot_p)
+            else:
+                bs_mtm = black_scholes_put(spot_p, k_p, du_rest / 252.0, taxa_selic_anual, sigma_dec)
+                prem_atual_est = bs_mtm["premio"]
+
+            credito_pos = prem_rec_p * qtd_p
+            garantia_pos = k_p * qtd_p
+            resultado_mtm = (prem_rec_p - prem_atual_est) * qtd_p
+
+            total_credito_cart += credito_pos
+            total_garantia_cart += garantia_pos
+            total_mtm_cart += resultado_mtm
+
+            status_pos = (
+                "⌛ Vencida"
+                if dias_rest < 0
+                else ("🚨 ITM (Risco Exercício)" if spot_p < k_p else ("⚠️ Atenção (< 3%)" if dist_exerc < 3.0 else "✅ OTM Segura"))
+            )
+
+            linhas_carteira_puts.append({
+                "Opção": pos["Codigo"],
+                "Ativo": tk_p,
+                "Vencimento": dt_venc_p.strftime("%d/%m/%Y"),
+                "Dias": dias_rest,
+                "Spot (R$)": spot_p,
+                "Strike (R$)": k_p,
+                "Dist. Exercício": dist_exerc,
+                "Qtd": qtd_p,
+                "Prêmio Rec.": prem_rec_p,
+                "Prêmio Atual (Est.)": prem_atual_est,
+                "Resultado MtM (R$)": resultado_mtm,
+                "Garantia (R$)": garantia_pos,
+                "Status": status_pos,
+            })
+
+        kp1, kp2, kp3, kp4 = st.columns(4)
+        kp1.metric("Posições Abertas", len(linhas_carteira_puts), border=True)
+        kp2.metric(
+            "Prêmio Total Recebido",
+            f"R$ {total_credito_cart:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            border=True,
+        )
+        kp3.metric(
+            "Resultado Parcial (MtM)",
+            f"R$ {total_mtm_cart:+,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            delta=f"{(total_mtm_cart / total_credito_cart * 100):+.1f}% do prêmio" if total_credito_cart > 0 else None,
+            border=True,
+        )
+        kp4.metric(
+            "Garantia Total Comprometida",
+            f"R$ {total_garantia_cart:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            border=True,
+        )
+
+        df_carteira_puts = pd.DataFrame(linhas_carteira_puts)
+        st.dataframe(
+            df_carteira_puts,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Spot (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Strike (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Dist. Exercício": st.column_config.NumberColumn(format="%+.2f%%"),
+                "Prêmio Rec.": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Prêmio Atual (Est.)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Resultado MtM (R$)": st.column_config.NumberColumn(format="R$ %+.2f"),
+                "Garantia (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
+
+        c_exp_p, c_rem_p, c_btn_rem_p = st.columns([1.4, 1.4, 0.8])
+        with c_exp_p:
+            csv_puts = df_carteira_puts.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
+            st.download_button(
+                label="📥 Exportar Carteira de Puts (CSV)",
+                data=csv_puts,
+                file_name=f"carteira_puts_{hoje_sp.strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                width="stretch",
+            )
+        with c_rem_p:
+            opcoes_encerrar = [f"{i + 1}. {p['Codigo']} (Strike R$ {p['Strike']:.2f} • {p['Qtd']}x)" for i, p in enumerate(st.session_state["puts_vendidas"])]
+            sel_encerrar = st.selectbox("Encerrar / Remover posição:", opcoes_encerrar, label_visibility="collapsed", key="sel_enc_put")
+        with c_btn_rem_p:
+            if st.button("🗑️ Encerrar", width="stretch", key="btn_enc_put"):
+                idx_remover = int(sel_encerrar.split(".").pop(0)) - 1
+                st.session_state["puts_vendidas"].pop(idx_remover)
+                st.rerun()
+    else:
+        st.info("Nenhuma venda de Put registrada nesta sessão. Abra **➕ Registrar Nova Venda de Put** acima para acompanhar suas posições.")
+
+
+    st.divider()
+
+
     # --- SEÇÃO 4: RADAR DE CANDIDATAS A VENDA DE PUT NA CARTEIRA ---
     st.subheader("🔍 Radar de Candidatas à Venda de Put (Carteira B3)")
     st.caption("Ativos ordenados pelo menor IFR (14) — papéis descontados onde os prêmios de Put costumam oferecer melhor relação risco/retorno.")
@@ -1750,6 +2135,8 @@ with aba_opcoes:
         )
 
 
+#########################################################################################################
+
 
 with aba_guia:
     st.title("ℹ️ Guia de Uso e Critérios Técnicos")
@@ -1763,10 +2150,11 @@ with aba_guia:
     # 1. Barra Lateral (Watchlist B3)
     st.header(":blue[Painel Lateral (Watchlist B3)]")
     st.markdown(
-        r"""
-        * **Lista Interativa de Ativos:** Exibe os **29 ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`) com cotação de fechamento e variação diária. Clicar em qualquer ativo carrega imediatamente seu gráfico na **Aba 1**.
+        fr"""
+        * **Lista Interativa de Ativos:** Exibe os **{len(LISTA_CARTEIRA_B3)} ativos líquidos da B3** (incluindo ETFs como `BOVA11` e `SMAL11`) com cotação de fechamento e variação diária. Clicar em qualquer ativo carrega imediatamente seu gráfico na **Aba 1**.
         * **Ordenação Clicável (Estilo TradingView):** Clique diretamente nos títulos das colunas (**Símbolo**, **Preço** ou **Var%**) para alternar entre ordem crescente (`↑`) e decrescente (`↓`).
         * **Carregamento Automático e Horário de Leitura:** Ao abrir o aplicativo, todas as cotações são carregadas automaticamente com registro de data e hora no fuso de Brasília (**🕒 Última leitura**). O botão **🔄 Atualizar Cotações** limpa o cache e sincroniza toda a carteira.
+        * **Gerenciar Watchlist B3:** Permite adicionar novos tickers da B3, remover ativos ou restaurar a lista padrão diretamente na sessão, além de exportar o Scanner e a Grade de Opções em **CSV (padrão Excel PT-BR)**.
         """
     )
 
@@ -1779,22 +2167,23 @@ with aba_guia:
 
     with col_g1:
         with st.container(border=True):
-            st.subheader("📈 Aba 1: Gráfico Individual")
+            st.subheader("📈 Aba 1: GRÁFICO")
             st.markdown(
                 r"""
                 Focada na análise detalhada de um único ativo:
-                * **Controles do Gráfico:** Seletor de ativo (incluindo a opção *"Outro (digitar)..."* para consultar qualquer ticker da B3), **Timeframe** (`1d` ou `1wk`) e **Período Histórico**.
-                * **Limitações da API (Brapi):** No plano gratuito, períodos acima de **3 meses (`3mo`)** funcionam apenas para `PETR4`, `VALE3`, `ITUB4` e `MGLU3`. Os demais ativos operam em **`1mo`** ou **`3mo`**.
+                * **Controles do Gráfico:** Sincronizado diretamente com o ativo clicado na **Watchlist B3**, permitindo alternar **Timeframe** (`1d` ou `1wk`) e **Período Histórico** (`3mo`, `1y`, `2y` ou `5y`).
+                * **Enquadramento OHLC Automático:** Nos períodos longos (`2y` e `5y`) em modo Diário (`1d`), os candles consolidam blocos OHLC reais (`open=first`, `high=max`, `low=min`, `close=last`) para enquadrar todo o histórico na janela sem distorcer máximas, mínimas, médias ou IFR.
+                * **Limitações da API (Brapi):** No plano gratuito, períodos acima de **3 meses (`3mo`)** funcionam apenas para `PETR4`, `VALE3`, `ITUB4` e `MGLU3`. Os demais ativos operam em **`3mo`**.
                 * **Cards e Gráfico (TradingView):** Exibem fechamento ajustado, variação percentual, **IFR (14)**, candlesticks com seletor de médias (**EMA 17/72**, **EMA 9/21** ou **Ambas**) e subpainel de IFR.
                 """
             )
 
     with col_g2:
         with st.container(border=True):
-            st.subheader("🔍 Aba 2: Scanner de RSI (Carteira)")
+            st.subheader("🔍 Aba 2: SCANNER")
             st.markdown(
-                r"""
-                Exibe a tabela completa dos **29 ativos** da carteira em **3 meses (`1d`)**, já carregada automaticamente na abertura do app:
+                fr"""
+                Exibe a tabela completa dos **{len(LISTA_CARTEIRA_B3)} ativos** da carteira em **3 meses (`1d`)**, já carregada automaticamente na abertura do app:
                 * **Filtros Rápidos:** Permite isolar papéis em *Sobrevenda*, *Sobrecompra*, com *Cruzamento recente de Médias* (`9/21` ou `17/72`) ou com *Volume Anormal*.
                 * **Ordenação Padrão:** A tabela inicia ordenada do **menor IFR para o maior**, destacando primeiro os ativos mais descontados.
                 * **Atualização:** Utilize o botão **🔄 Atualizar Cotações** na barra lateral para renovar os dados.
@@ -1805,10 +2194,10 @@ with aba_guia:
 
     with col_g3:
         with st.container(border=True):
-            st.subheader("🗂️ Aba 3: Visão Geral (Subplots 3M)")
+            st.subheader("🗂️ Aba 3: MULTI-GRÁFICOS")
             st.markdown(
-                r"""
-                Apresenta uma grade visual limpa (**3 gráficos por linha**) com os 29 ativos no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
+                fr"""
+                Apresenta uma grade visual limpa (**3 gráficos por linha**) com os **{len(LISTA_CARTEIRA_B3)} ativos** no período fixo de **3 meses** e timeframe **Diário (`1d`)**:
                 * **Cabeçalho de cada Card:** Mostra o código do ativo, preço de fechamento, **variação percentual diária** e o valor atual do **IFR (14)** destacado em cor quando atinge extremos.
                 * **Controles:** Permite filtrar por zonas de IFR (*Sobrevenda*, *Sobrecompra* ou *Extremos*) e ordenar os gráficos por *Ordem Alfabética*, *Maior Alta*, *Maior Queda* ou *Menor IFR*.
                 """
@@ -1816,7 +2205,7 @@ with aba_guia:
 
     with col_g4:
         with st.container(border=True):
-            st.subheader("🌐 Aba 4: Mercado")
+            st.subheader("🌐 Aba 4: MERCADO")
             st.markdown(
                 r"""
                 Painel macroeconômico e de benchmarks globais:
@@ -1830,7 +2219,7 @@ with aba_guia:
 
     with col_g5:
         with st.container(border=True):
-            st.subheader("📰 Aba 5: Notícias")
+            st.subheader("📰 Aba 5: NOTÍCIAS")
             st.markdown(
                 r"""
                 Feed integrado de manchetes financeiras via **Google News RSS** (com cache de **15 minutos**):
@@ -1841,7 +2230,7 @@ with aba_guia:
 
     with col_g6:
         with st.container(border=True):
-            st.subheader("🔔 Aba 6: Alertas")
+            st.subheader("🔔 Aba 6: ALERTAS")
             st.markdown(
                 r"""
                 Central de monitoramento e sinalização automática na Watchlist:
@@ -1851,12 +2240,14 @@ with aba_guia:
             )
 
     with st.container(border=True):
-        st.subheader("🎯 Aba 7: Opções (Venda de Put)")
+        st.subheader("🎯 Aba 7: OPÇÕES")
         st.markdown(
             r"""
-            Bancada completa para estruturação e simulação de **Venda Coberta de Put (Cash-Secured Put)**:
-            * **Grade de Strikes OTM & Black-Scholes:** Gera automaticamente os códigos de referência das séries mensais da B3 (`M` a `X`, vencimento na 3ª sexta-feira) com **Prêmio Teórico**, **Taxa Anualizada (% a.a.)**, **Delta (Δ)** e **Probabilidade de Não-Exercício**.
+            Bancada completa para estruturação, rolagem e gestão de **Venda Coberta de Put (Cash-Secured Put)**:
+            * **Grade de Strikes OTM & Black-Scholes:** Gera automaticamente os códigos de referência das séries mensais da B3 (`M` a `X`, vencimento na 3ª sexta-feira) com **Prêmio Teórico**, **Taxa Anualizada (% a.a.)**, **Delta (Δ)**, **Probabilidade de Não-Exercício** e exportação em **CSV**.
             * **Simulador & Gráfico de Payoff:** Calcula o **Crédito Líquido**, **Caixa/Garantia necessária**, **Breakeven real** e a **Volatilidade Implícita (IV Book)**, exibindo a curva de resultado no vencimento com marcadores de **Breakeven**, **Spot** e canal sombreado de **±1 Desvio Padrão (`±1σ`)**.
+            * **Simulador de Rolagem de Put:** Calcula o **crédito ou débito líquido** ao recomprar a Put atual e rolar para o próximo vencimento, mostrando o **Novo Breakeven Acumulado** e a taxa anualizada sobre o prazo extra.
+            * **Carteira de Puts Vendidas (Diário):** Registra operações em andamento com monitoramento de **distância até o exercício**, **garantia comprometida** e **Marcação a Mercado (MtM)**.
             * **Radar de Candidatas:** Lista os ativos mais descontados da carteira (menor IFR) para facilitar a escolha de oportunidades.
             """
         )
@@ -1878,6 +2269,7 @@ with aba_guia:
         | **Volume Relativo** | Comparação entre o volume financeiro do último pregão e a **Média Móvel Simples de 20 dias (MM20)**. | **🔥 Alerta de Volume:** Sinalizado quando o volume do dia é **≥ 150%** da média de 20 dias. |
         | **Juro Real (Fisher)** | `((1 + CDI) / (1 + IPCA_12M) - 1) × 100` com séries oficiais do Banco Central (SGS). | Mede o retorno real anualizado acima da inflação acumulada nos últimos 12 meses. |
         | **Black-Scholes & ±1σ** | Modelo europeu com Selic vigente (BCB) e Volatilidade Histórica anualizada (252 du); faixa de `1σ = S × σ × √T`. | Estima prêmio justo da Put, Delta, IV do book e o intervalo esperado de 68,2% até o vencimento. |
+        | **MtM (Marcação a Mercado)** | `(Prêmio Recebido − Prêmio Teórico Atual) × Quantidade` via Black-Scholes. | Estima o lucro ou prejuízo parcial caso a Put vendida seja recomprada antes do vencimento. |
         """
     )
 
