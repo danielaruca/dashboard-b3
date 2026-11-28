@@ -185,23 +185,30 @@ def buscar_cambio_e_ouro() -> dict:
         elif len(serie) == 1:
             resultado[chave] = {"bid": float(serie[-1]["valor"]), "pctChange": 0.0}
 
-    # 2. Bitcoin (BTC/BRL) via API pública da Binance (sem chave)
+    # 2. Bitcoin (BTC/BRL) via CoinGecko Public API (sem bloqueio geográfico nos EUA ou Brasil)
     try:
-        url_btc = "/".join(["https://api.binance.com", "api", "v3", "ticker", "24hr"])
+        host_cg = ".".join(["api", "coingecko", "com"])
+        url_btc = "/".join([f"https://{host_cg}", "api", "v3", "simple", "price"])
         resp_btc = requests.get(
             url_btc,
-            params={"symbol": "BTCBRL"},
-            headers=headers,
-            timeout=8,
+            params={
+                "ids": "bitcoin",
+                "vs_currencies": "brl",
+                "include_24hr_change": "true",
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
         )
         if resp_btc.status_code == 200:
-            dados_btc = resp_btc.json()
-            ult_btc = float(dados_btc.get("lastPrice", 0.0))
-            pct_btc = float(dados_btc.get("priceChangePercent", 0.0))
+            btc_info = resp_btc.json().get("bitcoin", {})
+            ult_btc = float(btc_info.get("brl", 0.0))
+            pct_btc = float(btc_info.get("brl_24h_change", 0.0))
             if ult_btc > 0:
                 resultado["BTCBRL"] = {"bid": ult_btc, "pctChange": pct_btc}
     except Exception:
         pass
+
+
 
     # 3. Petróleo Brent Real (US$/barril) via Yahoo Finance Chart API (BZ=F)
     try:
